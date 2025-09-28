@@ -5,6 +5,21 @@ const NETLIFY_UPLOAD_ENDPOINT = '/api/upload-photo';
 const STORAGE_KEY = 'nutri-scan:meals';
 let cachedMeals = null;
 
+const NUTRIENT_FIELDS = [
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'fiber',
+  'sugar',
+  'sodium',
+  'potassium',
+  'calcium',
+  'iron',
+  'vitamin_c',
+  'vitamin_a'
+];
+
 function generateId() {
   const globalCrypto = typeof globalThis !== 'undefined' ? globalThis.crypto : null;
   if (globalCrypto?.randomUUID) {
@@ -13,29 +28,98 @@ function generateId() {
   return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
+function normalizeIngredient(ingredient, index = 0) {
+  const safe = typeof ingredient === 'object' && ingredient !== null ? { ...ingredient } : {};
+  const normalized = {
+    id: typeof safe.id === 'string' && safe.id.length > 0 ? safe.id : `ingredient_${generateId()}`,
+    name:
+      typeof safe.name === 'string' && safe.name.length > 0
+        ? safe.name
+        : `Ingredient ${index + 1}`,
+    unit: typeof safe.unit === 'string' && safe.unit.length > 0 ? safe.unit : 'g',
+    amount: Number(safe.amount) || 0
+  };
+
+  NUTRIENT_FIELDS.forEach((field) => {
+    const parsed = Number(safe[field]);
+    normalized[field] = Number.isFinite(parsed) ? parsed : 0;
+  });
+
+  return normalized;
+}
+
+function normalizeIngredients(ingredients = []) {
+  if (!Array.isArray(ingredients) || ingredients.length === 0) {
+    return [];
+  }
+
+  return ingredients.map((ingredient, index) => normalizeIngredient(ingredient, index));
+}
+
+function sumNutrients(ingredients) {
+  return ingredients.reduce(
+    (totals, ingredient) => {
+      NUTRIENT_FIELDS.forEach((field) => {
+        totals[field] += Number(ingredient[field]) || 0;
+      });
+      return totals;
+    },
+    NUTRIENT_FIELDS.reduce((acc, field) => ({ ...acc, [field]: 0 }), {})
+  );
+}
+
 function withDefaults(meal) {
-  return {
+  const ingredients = normalizeIngredients(meal.ingredients);
+  const totals = ingredients.length > 0 ? sumNutrients(ingredients) : null;
+
+  const base = {
     id: meal.id || `meal_${generateId()}`,
     meal_name: '',
     meal_type: 'lunch',
-    calories: 0,
-    protein: 0,
-    carbs: 0,
-    fat: 0,
-    fiber: 0,
-    sugar: 0,
-    sodium: 0,
-    potassium: 0,
-    calcium: 0,
-    iron: 0,
-    vitamin_c: 0,
-    vitamin_a: 0,
     analysis_notes: '',
     notes: '',
     photo_url: '',
     created_date: new Date().toISOString(),
-    ...meal
+    ...meal,
+    ingredients
   };
+
+  NUTRIENT_FIELDS.forEach((field) => {
+    const provided = Number(base[field]);
+    base[field] = Number.isFinite(provided)
+      ? provided
+      : totals
+        ? totals[field]
+        : 0;
+  });
+
+  if (totals) {
+    NUTRIENT_FIELDS.forEach((field) => {
+      base[field] = totals[field];
+    });
+  }
+
+  if (!Array.isArray(base.ingredients) || base.ingredients.length === 0) {
+    base.ingredients = [
+      normalizeIngredient(
+        {
+          name: base.meal_name || 'Meal serving',
+          unit: 'serving',
+          amount: 1,
+          ...NUTRIENT_FIELDS.reduce(
+            (acc, field) => ({
+              ...acc,
+              [field]: Number.isFinite(Number(base[field])) ? Number(base[field]) : 0
+            }),
+            {}
+          )
+        },
+        0
+      )
+    ];
+  }
+
+  return base;
 }
 
 async function uploadPhotoIfNeeded(photoUrl) {
