@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Search, Filter, Calendar } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { createPageUrl } from "@/utils";
 
 import MealHistoryCard from "../components/history/MealHistoryCard";
 import HistoryStats from "../components/history/HistoryStats";
@@ -16,6 +18,7 @@ export default function HistoryPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState("all");
   const [filterPeriod, setFilterPeriod] = useState("all");
+  const navigate = useNavigate();
 
   useEffect(() => {
     loadMeals();
@@ -169,7 +172,11 @@ export default function HistoryPage() {
               ))
             ) : (
               filteredMeals.map((meal) => (
-                <MealHistoryCard key={meal.id} meal={meal} />
+                <MealHistoryCard
+                  key={meal.id}
+                  meal={meal}
+                  onSelect={() => navigate(`${createPageUrl("History")}/${meal.id}`)}
+                />
               ))
             )}
           </div>

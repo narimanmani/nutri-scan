@@ -1,3 +1,5 @@
+const { getStore } = require('@netlify/blobs');
+
 const ANALYSIS_SCHEMA = {
   name: 'meal_analysis',
   schema: {
@@ -68,6 +70,70 @@ function ensureNumbers(payload) {
   });
 
   return result;
+}
+
+function parseImageDataUrl(dataUrl) {
+  if (typeof dataUrl !== 'string' || dataUrl.length === 0) {
+    throw new Error('A data URL is required to store the photo.');
+  }
+
+  const matches = dataUrl.match(/^data:(.+?);base64,(.+)$/);
+  if (!matches) {
+    throw new Error('The provided image is not a valid base64 data URL.');
+  }
+
+  const mimeType = matches[1];
+  const base64 = matches[2];
+  const buffer = Buffer.from(base64, 'base64');
+
+  return { mimeType, buffer };
+}
+
+function extensionFromMime(mimeType) {
+  if (!mimeType) {
+    return 'png';
+  }
+
+  const [, subtype] = mimeType.split('/');
+  if (subtype === 'jpeg') {
+    return 'jpg';
+  }
+  if (subtype) {
+    return subtype.split('+')[0];
+  }
+  return 'png';
+}
+
+async function storeMealPhoto(imageDataUrl) {
+  const { mimeType, buffer } = parseImageDataUrl(imageDataUrl);
+
+  let store;
+  try {
+    store = getStore({ name: process.env.MEAL_PHOTO_STORE || 'meal-photos' });
+  } catch (error) {
+    throw new Error('Unable to access Netlify Blob storage.');
+  }
+
+  if (!store) {
+    throw new Error('Netlify Blob store is not configured.');
+  }
+
+  const key = `meals/${Date.now()}-${Math.random().toString(36).slice(2)}.${extensionFromMime(mimeType)}`;
+
+  await store.set(key, buffer, {
+    visibility: 'public',
+    contentType: mimeType,
+    metadata: {
+      createdAt: new Date().toISOString(),
+    },
+  });
+
+  const publicUrl = store.getPublicUrl(key);
+  if (!publicUrl) {
+    throw new Error('Unable to generate a public URL for the uploaded photo.');
+  }
+
+  return { url: publicUrl, key };
 }
 
 async function analyzeWithOpenAI({ imageDataUrl }) {
@@ -178,6 +244,30 @@ exports.handler = async function handler(event) {
     } catch (error) {
       console.error('Failed to analyze meal image via Netlify function:', error);
       return jsonResponse(500, { error: error.message || 'Failed to analyze the meal image.' });
+    }
+  }
+
+  if (subPath === '/upload-photo' && event.httpMethod === 'POST') {
+    try {
+      const payload = JSON.parse(event.body || '{}');
+      const { imageDataUrl } = payload;
+
+      if (!imageDataUrl) {
+        return jsonResponse(400, { error: 'imageDataUrl is required.' });
+      }
+
+      try {
+        const { url, key } = await storeMealPhoto(imageDataUrl);
+        return jsonResponse(200, { url, key });
+      } catch (error) {
+        console.error('Failed to store meal photo in Netlify Blobs:', error);
+        return jsonResponse(502, {
+          error: error.message || 'Unable to store the meal photo at this time.',
+        });
+      }
+    } catch (error) {
+      console.error('Invalid upload-photo payload:', error);
+      return jsonResponse(400, { error: 'Invalid request payload.' });
     }
   }
 

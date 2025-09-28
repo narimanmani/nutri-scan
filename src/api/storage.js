@@ -1,5 +1,7 @@
 import mealsSeed from '@/data/meals.json';
 
+const NETLIFY_UPLOAD_ENDPOINT = '/api/upload-photo';
+
 const STORAGE_KEY = 'nutri-scan:meals';
 let cachedMeals = null;
 
@@ -34,6 +36,41 @@ function withDefaults(meal) {
     created_date: new Date().toISOString(),
     ...meal
   };
+}
+
+async function uploadPhotoIfNeeded(photoUrl) {
+  if (typeof photoUrl !== 'string' || photoUrl.length === 0) {
+    return '';
+  }
+
+  // Skip uploads for already hosted images.
+  if (!photoUrl.startsWith('data:')) {
+    return photoUrl;
+  }
+
+  try {
+    const response = await fetch(NETLIFY_UPLOAD_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ imageDataUrl: photoUrl })
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || 'Failed to store the photo on Netlify.');
+    }
+
+    const payload = await response.json();
+    if (payload?.url) {
+      return payload.url;
+    }
+  } catch (error) {
+    console.warn('Falling back to inline photo URL after Netlify upload error:', error);
+  }
+
+  return photoUrl;
 }
 
 function readFromLocalStorage() {
@@ -105,16 +142,61 @@ export async function listMeals(order = '-created_date', limit) {
 
 export async function createMeal(meal) {
   const meals = await getMeals();
+  const storedPhotoUrl = await uploadPhotoIfNeeded(meal.photo_url);
   const newMeal = withDefaults({
     ...meal,
     id: `meal_${generateId()}`,
-    created_date: new Date().toISOString()
+    created_date: new Date().toISOString(),
+    photo_url: storedPhotoUrl
   });
 
   meals.unshift(newMeal);
   cachedMeals = meals;
   writeToLocalStorage(meals);
   return newMeal;
+}
+
+export async function getMealById(id) {
+  if (!id) {
+    return null;
+  }
+
+  const meals = await getMeals();
+  const found = meals.find((meal) => meal.id === id);
+  return found ? withDefaults(found) : null;
+}
+
+export async function updateMeal(id, updates = {}) {
+  if (!id) {
+    throw new Error('An id is required to update a meal.');
+  }
+
+  const meals = await getMeals();
+  const index = meals.findIndex((meal) => meal.id === id);
+
+  if (index === -1) {
+    throw new Error('Meal not found.');
+  }
+
+  const existing = meals[index];
+  const nextPhotoSource =
+    typeof updates.photo_url === 'string' && updates.photo_url.length > 0
+      ? updates.photo_url
+      : existing.photo_url;
+  const storedPhotoUrl = await uploadPhotoIfNeeded(nextPhotoSource);
+
+  const updatedMeal = withDefaults({
+    ...existing,
+    ...updates,
+    id: existing.id,
+    created_date: existing.created_date,
+    photo_url: storedPhotoUrl
+  });
+
+  meals[index] = updatedMeal;
+  cachedMeals = meals;
+  writeToLocalStorage(meals);
+  return updatedMeal;
 }
 
 export async function clearMeals() {

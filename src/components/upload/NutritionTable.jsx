@@ -1,22 +1,45 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Save, Edit3, Loader2 } from "lucide-react";
+import { Save, Edit3, Loader2, ImagePlus } from "lucide-react";
+import { getDataUrlFromFile } from "@/api/openaiClient";
 
-export default function NutritionTable({ initialData, onSave, onCancel, isSaving }) {
+export default function NutritionTable({ initialData, onSave, onCancel, isSaving, allowPhotoChange = false }) {
   const [editedData, setEditedData] = useState(initialData);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    setEditedData(initialData);
+  }, [initialData]);
 
   const handleInputChange = (field, value) => {
     setEditedData(prev => ({
       ...prev,
-      [field]: field === 'meal_name' || field === 'notes' || field === 'meal_date' || field === 'meal_type' 
-        ? value 
+      [field]: field === 'meal_name' || field === 'notes' || field === 'meal_date' || field === 'meal_type'
+        ? value
         : parseFloat(value) || 0
     }));
+  };
+
+  const handlePhotoSelect = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const dataUrl = await getDataUrlFromFile(file);
+      setEditedData((prev) => ({
+        ...prev,
+        photo_url: dataUrl,
+      }));
+    } catch (error) {
+      console.error('Failed to process the selected photo:', error);
+    }
   };
 
   const nutritionFields = [
@@ -44,6 +67,26 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
             alt="Analyzed meal"
             className="w-full h-48 object-cover"
           />
+          {allowPhotoChange && (
+            <div className="p-4 bg-gray-50 border-t border-gray-100 flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <ImagePlus className="w-4 h-4 mr-2" />
+                Change photo
+              </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handlePhotoSelect}
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
 
