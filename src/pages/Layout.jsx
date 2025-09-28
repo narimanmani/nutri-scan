@@ -2,7 +2,7 @@
 import { useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { Camera, BarChart3, History, Leaf, ClipboardList } from "lucide-react";
+import { Camera, BarChart3, History, Leaf, ClipboardList, Dumbbell } from "lucide-react";
 import { APP_DESCRIPTION, APP_NAME, APP_TAGLINE } from "@/constants/app";
 import {
   Sidebar,
@@ -38,6 +38,11 @@ const navigationItems = [
     title: "Diet Plans",
     url: createPageUrl("Diet Plans"),
     icon: ClipboardList,
+  },
+  {
+    title: "Workout Planner",
+    url: createPageUrl("Workout Planner"),
+    icon: Dumbbell,
   },
 ];
 

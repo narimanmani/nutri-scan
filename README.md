@@ -6,6 +6,7 @@ A Vite + React application that analyzes meal photos using OpenAI GPT-4o and kee
 
 - Node.js 18+
 - An OpenAI API key with access to the GPT-4o model (optional for mock responses)
+- (Optional) A [wger](https://wger.de/en/software/api) API token for richer workout visuals and authenticated exercise lookups
 - (Optional) [Netlify CLI](https://docs.netlify.com/cli/get-started/) for local function development
 
 ## Getting Started
@@ -14,12 +15,14 @@ A Vite + React application that analyzes meal photos using OpenAI GPT-4o and kee
    ```bash
    npm install
    ```
-2. Create a `.env` file in the project root with your OpenAI key. The Netlify function reads `OPENAI_API_KEY`; providing
+2. Create a `.env` file in the project root with your API keys. The Netlify function reads `OPENAI_API_KEY`; providing
    `VITE_OPENAI_API_KEY` enables the in-browser fallback without running Netlify locally.
    ```env
    OPENAI_API_KEY=sk-your-key
    # Optional fallback for running `npm run dev` without Netlify
    VITE_OPENAI_API_KEY=sk-your-key
+   # Optional: enables authenticated requests for workout plans and anatomy assets
+   VITE_WGER_API_KEY=your-wger-token
    ```
    If the keys are not provided the app falls back to a mock nutritional analysis for testing purposes.
 3. Start the development server:
