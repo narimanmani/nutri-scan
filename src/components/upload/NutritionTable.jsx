@@ -613,11 +613,11 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
           </p>
         </CardHeader>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto overflow-y-visible">
             <table className="min-w-full divide-y divide-gray-100 text-sm">
               <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
                 <tr>
-                  <th className="px-6 py-3 text-left">Ingredient</th>
+                  <th className="px-6 py-3 text-left w-[22rem]">Ingredient</th>
                   <th className="px-4 py-3 text-left w-32">Amount</th>
                   <th className="px-4 py-3 text-left w-36">Unit</th>
                   <th className="px-4 py-3 text-left w-28">Calories</th>
@@ -636,19 +636,19 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
                   return (
                     <React.Fragment key={ingredient.id}>
                       <tr>
-                        <td className="px-6 py-4 align-top relative">
+                        <td className="px-6 py-4 align-top relative w-[22rem]">
                           <div className="relative">
                             <Input
                               value={ingredient.name}
                               onChange={(event) => handleIngredientNameInput(ingredient.id, event.target.value)}
                               placeholder="e.g. Grilled chicken"
-                              className="rounded-xl border-gray-200 pr-10"
+                              className="w-full rounded-xl border-gray-200 pr-10"
                             />
                             {isFetchingSuggestions && (
                               <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-gray-400" />
                             )}
                             {(isFetchingSuggestions || suggestionsForIngredient.length > 0) && (
-                              <div className="absolute left-0 right-0 top-full z-20 mt-2 max-h-64 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-xl">
+                              <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-64 min-w-[20rem] overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-xl">
                                 {suggestionsForIngredient.length === 0 ? (
                                   <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-500">
                                     {isFetchingSuggestions ? (
