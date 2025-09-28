@@ -1,5 +1,10 @@
 const { getStore } = require('@netlify/blobs');
 
+const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 8000);
+
+const suggestionCache = new Map();
+const estimateCache = new Map();
+
 const ANALYSIS_SCHEMA = {
   name: 'meal_analysis',
   schema: {
@@ -86,6 +91,12 @@ const UNIT_ALIASES = {
   portions: 'serving'
 };
 
+const USDA_API_KEY = process.env.USDA_API_KEY;
+const USDA_TIMEOUT_MS = Number(process.env.INGREDIENT_API_TIMEOUT_MS || 8000);
+const USDA_SEARCH_URL = 'https://api.nal.usda.gov/fdc/v1/foods/search';
+const USDA_FOOD_URL = 'https://api.nal.usda.gov/fdc/v1/food';
+const DEFAULT_SUGGESTION_LIMIT = 7;
+
 function canonicalizeUnit(unit) {
   if (typeof unit !== 'string') {
     return 'g';
@@ -118,6 +129,67 @@ const NUTRIENT_FIELDS = [
   'vitamin_c',
   'vitamin_a'
 ];
+
+const FALLBACK_INGREDIENTS = [
+  {
+    id: 'fallback-chicken-breast',
+    fdcId: null,
+    name: 'Grilled chicken breast',
+    description: 'Boneless, skinless breast cooked without breading.',
+    typical_unit: 'g',
+    example_portion: '85 g',
+    data_source: 'fallback',
+    perGram: { calories: 1.65, protein: 0.31, carbs: 0, fat: 0.04, fiber: 0, sugar: 0 }
+  },
+  {
+    id: 'fallback-broccoli',
+    fdcId: null,
+    name: 'Steamed broccoli florets',
+    description: 'Broccoli cooked with steam and no added butter or oil.',
+    typical_unit: 'g',
+    example_portion: '90 g',
+    data_source: 'fallback',
+    perGram: { calories: 0.35, protein: 0.028, carbs: 0.07, fat: 0.003, fiber: 0.028, sugar: 0.015 }
+  },
+  {
+    id: 'fallback-brown-rice',
+    fdcId: null,
+    name: 'Cooked brown rice',
+    description: 'Whole-grain brown rice cooked in water.',
+    typical_unit: 'cup',
+    example_portion: '1 cup',
+    data_source: 'fallback',
+    perGram: { calories: 1.11, protein: 0.024, carbs: 0.23, fat: 0.009, fiber: 0.018, sugar: 0.002 }
+  },
+  {
+    id: 'fallback-avocado',
+    fdcId: null,
+    name: 'Avocado',
+    description: 'Fresh Hass avocado, raw.',
+    typical_unit: 'g',
+    example_portion: '50 g',
+    data_source: 'fallback',
+    perGram: { calories: 1.6, protein: 0.02, carbs: 0.084, fat: 0.15, fiber: 0.067, sugar: 0.03 }
+  },
+  {
+    id: 'fallback-greek-yogurt',
+    fdcId: null,
+    name: 'Greek yogurt (plain, nonfat)',
+    description: 'Unsweetened nonfat strained yogurt.',
+    typical_unit: 'g',
+    example_portion: '170 g (6 oz)',
+    data_source: 'fallback',
+    perGram: { calories: 0.59, protein: 0.1, carbs: 0.038, fat: 0.002, fiber: 0, sugar: 0.029 }
+  }
+];
+
+const FALLBACK_UNIT_TO_GRAMS = {
+  g: 1,
+  ml: 1,
+  oz: 28.3495,
+  cup: 240,
+  serving: 100
+};
 
 const MOCK_RESPONSE = {
   meal_name: 'Grilled Chicken Salad',
@@ -237,6 +309,473 @@ function ensureNumbers(payload) {
   });
 
   return result;
+}
+
+function fallbackSuggestions(query) {
+  if (!query || typeof query !== 'string') {
+    return FALLBACK_INGREDIENTS.slice(0, 7);
+  }
+
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return FALLBACK_INGREDIENTS.slice(0, 7);
+  }
+
+  const matches = FALLBACK_INGREDIENTS.filter((item) =>
+    item.name.toLowerCase().includes(normalized)
+  );
+
+  return (matches.length > 0 ? matches : FALLBACK_INGREDIENTS).slice(0, 7);
+}
+
+function fallbackEstimate({ ingredientName, amount, unit }) {
+  const normalizedName = typeof ingredientName === 'string' ? ingredientName.trim().toLowerCase() : '';
+  const match = FALLBACK_INGREDIENTS.find((item) =>
+    item.name.toLowerCase() === normalizedName || item.name.toLowerCase().includes(normalizedName)
+  );
+
+  const safeAmount = Number(amount) || 0;
+  const safeUnit = canonicalizeUnit(unit);
+
+  if (!match || safeAmount <= 0) {
+    return {
+      name: ingredientName || 'Ingredient',
+      amount: safeAmount,
+      unit: safeUnit,
+      calories: 0,
+      protein: 0,
+      carbs: 0,
+      fat: 0,
+      fiber: 0,
+      sugar: 0,
+      sodium: 0,
+      potassium: 0,
+      calcium: 0,
+      iron: 0,
+      vitamin_c: 0,
+      vitamin_a: 0
+    };
+  }
+
+  const gramsEquivalent = safeAmount * (FALLBACK_UNIT_TO_GRAMS[safeUnit] || 1);
+  const estimate = { name: match.name, amount: safeAmount, unit: safeUnit };
+
+  Object.entries(match.perGram).forEach(([key, perGram]) => {
+    estimate[key] = Number((perGram * gramsEquivalent).toFixed(2));
+  });
+
+  [
+    'calories',
+    'protein',
+    'carbs',
+    'fat',
+    'fiber',
+    'sugar',
+    'sodium',
+    'potassium',
+    'calcium',
+    'iron',
+    'vitamin_c',
+    'vitamin_a'
+  ].forEach((field) => {
+    if (estimate[field] == null) {
+      estimate[field] = 0;
+    }
+  });
+
+  return estimate;
+}
+
+function cacheSuggestions(query, payload) {
+  const normalized = typeof query === 'string' ? query.trim().toLowerCase() : '';
+  if (!normalized) {
+    return payload;
+  }
+
+  suggestionCache.set(normalized, payload);
+  return payload;
+}
+
+function getCachedSuggestions(query) {
+  const normalized = typeof query === 'string' ? query.trim().toLowerCase() : '';
+  return normalized ? suggestionCache.get(normalized) : undefined;
+}
+
+function cacheEstimate(signature, payload) {
+  if (!signature) {
+    return payload;
+  }
+
+  estimateCache.set(signature, payload);
+  return payload;
+}
+
+function getCachedEstimate(signature) {
+  return signature ? estimateCache.get(signature) : undefined;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = OPENAI_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error(`Request to ${url} timed out after ${timeoutMs}ms`);
+      timeoutError.code = 'TIMEOUT';
+      throw timeoutError;
+    }
+    throw error;
+  }
+}
+
+async function fetchUsdaSuggestions(query) {
+  if (!USDA_API_KEY) {
+    return { suggestions: fallbackSuggestions(query) };
+  }
+
+  const cached = getCachedSuggestions(query);
+  if (cached) {
+    return cached;
+  }
+
+  if (!query || typeof query !== 'string' || query.trim().length < 2) {
+    return cacheSuggestions(query, { suggestions: [] });
+  }
+
+  const searchUrl = `${USDA_SEARCH_URL}?api_key=${USDA_API_KEY}`;
+  const body = {
+    query: query.trim(),
+    pageSize: 10,
+    sortBy: 'dataType.keyword',
+    sortOrder: 'desc',
+    requireAllWords: false,
+    dataType: ['Branded', 'Survey (FNDDS)', 'SR Legacy', 'Foundation']
+  };
+
+  try {
+    const response = await fetchWithTimeout(
+      searchUrl,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      },
+      USDA_TIMEOUT_MS
+    );
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      console.warn('USDA ingredient suggestion request returned an error. Using fallback data.', error);
+      return cacheSuggestions(query, { suggestions: fallbackSuggestions(query) });
+    }
+
+    const data = await response.json();
+    const foods = Array.isArray(data?.foods) ? data.foods : [];
+    const suggestions = foods
+      .map((food) => formatUsdaSuggestion(food))
+      .filter(Boolean)
+      .slice(0, DEFAULT_SUGGESTION_LIMIT);
+
+    if (suggestions.length === 0) {
+      return cacheSuggestions(query, { suggestions: fallbackSuggestions(query) });
+    }
+
+    return cacheSuggestions(query, { suggestions });
+  } catch (error) {
+    console.warn('USDA ingredient suggestion request failed. Using fallback data.', error);
+    return cacheSuggestions(query, { suggestions: fallbackSuggestions(query) });
+  }
+}
+
+function safeRound(value) {
+  return Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
+}
+
+function gramsFromServing(amount, unit, food) {
+  const normalizedUnit = canonicalizeUnit(unit);
+  const numericAmount = Number(amount);
+  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+    return null;
+  }
+
+  if (normalizedUnit === 'g' || normalizedUnit === 'ml') {
+    return numericAmount;
+  }
+
+  if (normalizedUnit === 'oz') {
+    return numericAmount * 28.3495;
+  }
+
+  if (normalizedUnit === 'cup') {
+    const portion = findPortionGramWeight(food, (text) => text.includes('cup'));
+    if (portion) {
+      return numericAmount * portion;
+    }
+    return numericAmount * 240;
+  }
+
+  if (normalizedUnit === 'serving') {
+    const portion = findPortionGramWeight(food);
+    if (portion) {
+      return numericAmount * portion;
+    }
+  }
+
+  return numericAmount * (FALLBACK_UNIT_TO_GRAMS[normalizedUnit] || 1);
+}
+
+function findPortionGramWeight(food, matcher) {
+  if (!Array.isArray(food?.foodPortions)) {
+    return null;
+  }
+
+  const predicate = typeof matcher === 'function' ? matcher : () => true;
+
+  for (const portion of food.foodPortions) {
+    const description = `${portion.modifier || ''} ${portion.measureUnitAbbreviation || ''} ${portion.portionDescription || ''}`
+      .trim()
+      .toLowerCase();
+
+    if (!description && matcher) {
+      continue;
+    }
+
+    if (!matcher || predicate(description)) {
+      const weight = Number(portion.gramWeight);
+      if (Number.isFinite(weight) && weight > 0) {
+        return weight;
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractNutrientsFromFood(food) {
+  const perGram = {};
+  let referenceGrams = null;
+
+  if (food?.labelNutrients && Number.isFinite(Number(food?.servingSize))) {
+    const grams = gramsFromServing(food.servingSize, food.servingSizeUnit, food);
+    if (Number.isFinite(grams) && grams > 0) {
+      referenceGrams = grams;
+
+      const ln = food.labelNutrients;
+      if (ln.calories?.value != null) {
+        perGram.calories = ln.calories.value / grams;
+      }
+      if (ln.protein?.value != null) {
+        perGram.protein = ln.protein.value / grams;
+      }
+      if (ln.carbohydrates?.value != null) {
+        perGram.carbs = ln.carbohydrates.value / grams;
+      }
+      if (ln.fat?.value != null) {
+        perGram.fat = ln.fat.value / grams;
+      }
+      if (ln.fiber?.value != null) {
+        perGram.fiber = ln.fiber.value / grams;
+      }
+      if (ln.sugars?.value != null) {
+        perGram.sugar = ln.sugars.value / grams;
+      }
+      if (ln.sodium?.value != null) {
+        perGram.sodium = ln.sodium.value / grams;
+      }
+      if (ln.potassium?.value != null) {
+        perGram.potassium = ln.potassium.value / grams;
+      }
+      if (ln.calcium?.value != null) {
+        perGram.calcium = ln.calcium.value / grams;
+      }
+      if (ln.iron?.value != null) {
+        perGram.iron = ln.iron.value / grams;
+      }
+      if (ln.vitaminC?.value != null) {
+        perGram.vitamin_c = ln.vitaminC.value / grams;
+      }
+      if (ln.vitaminA?.value != null) {
+        perGram.vitamin_a = ln.vitaminA.value / grams;
+      }
+    }
+  }
+
+  if (!referenceGrams && Array.isArray(food?.foodNutrients)) {
+    const nutrientMap = {
+      calories: ['energy'],
+      protein: ['protein'],
+      carbs: ['carbohydrate, by difference'],
+      fat: ['total lipid (fat)'],
+      fiber: ['fiber, total dietary'],
+      sugar: ['sugars, total', 'sugars, total including nlea'],
+      sodium: ['sodium, na'],
+      potassium: ['potassium, k'],
+      calcium: ['calcium, ca'],
+      iron: ['iron, fe'],
+      vitamin_c: ['vitamin c, total ascorbic acid'],
+      vitamin_a: ['vitamin a, iu', 'vitamin a, rae']
+    };
+
+    for (const [field, names] of Object.entries(nutrientMap)) {
+      const match = food.foodNutrients.find((nutrient) => {
+        const name = nutrient?.nutrientName?.toLowerCase();
+        return name && names.includes(name);
+      });
+
+      if (match && Number.isFinite(Number(match.amount))) {
+        perGram[field] = Number(match.amount) / 100;
+      }
+    }
+
+    referenceGrams = 100;
+  }
+
+  return { perGram, referenceGrams };
+}
+
+function scaleNutrients(perGram, grams) {
+  const result = {
+    calories: 0,
+    protein: 0,
+    carbs: 0,
+    fat: 0,
+    fiber: 0,
+    sugar: 0,
+    sodium: 0,
+    potassium: 0,
+    calcium: 0,
+    iron: 0,
+    vitamin_c: 0,
+    vitamin_a: 0
+  };
+
+  Object.entries(perGram || {}).forEach(([key, value]) => {
+    if (result.hasOwnProperty(key)) {
+      result[key] = safeRound((Number(value) || 0) * grams);
+    }
+  });
+
+  return result;
+}
+
+function formatUsdaSuggestion(food) {
+  if (!food || !food.fdcId || !food.description) {
+    return null;
+  }
+
+  const descriptionParts = [];
+  if (food.brandOwner) {
+    descriptionParts.push(food.brandOwner);
+  } else if (food.brandName) {
+    descriptionParts.push(food.brandName);
+  }
+
+  if (food.dataType) {
+    descriptionParts.push(food.dataType);
+  }
+
+  const portionText = food.householdServingFullText || formatServingText(food);
+  if (portionText) {
+    descriptionParts.push(`Serving: ${portionText}`);
+  }
+
+  const typicalUnit = canonicalizeUnit(food.servingSizeUnit) || 'g';
+  const examplePortion = portionText || (food.servingSize ? `${food.servingSize} ${food.servingSizeUnit || typicalUnit}` : null);
+
+  return {
+    id: String(food.fdcId),
+    fdcId: food.fdcId,
+    name: titleCase(food.description),
+    description: descriptionParts.join(' • ') || undefined,
+    typical_unit: typicalUnit,
+    example_portion: examplePortion || undefined,
+    data_source: 'usda'
+  };
+}
+
+function formatServingText(food) {
+  if (!Number.isFinite(Number(food?.servingSize))) {
+    return null;
+  }
+
+  const unit = food.servingSizeUnit || '';
+  return `${food.servingSize} ${unit}`.trim();
+}
+
+function titleCase(text) {
+  return text
+    ? text
+        .toLowerCase()
+        .split(' ')
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ')
+    : text;
+}
+
+async function fetchUsdaFoodDetails(fdcId) {
+  if (!USDA_API_KEY || !fdcId) {
+    return null;
+  }
+
+  const url = `${USDA_FOOD_URL}/${fdcId}?api_key=${USDA_API_KEY}`;
+
+  try {
+    const response = await fetchWithTimeout(url, {}, USDA_TIMEOUT_MS);
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      console.warn('USDA ingredient detail request returned an error.', error);
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.warn('USDA ingredient detail request failed.', error);
+    return null;
+  }
+}
+
+async function estimateIngredientWithUsda({ ingredientName, amount, unit, fdcId }) {
+  const normalizedUnit = canonicalizeUnit(unit);
+  const safeAmount = Number(amount) || 0;
+  const normalizedName = typeof ingredientName === 'string' ? ingredientName.trim() : '';
+  const cacheKey = fdcId ? `${fdcId}|${safeAmount}|${normalizedUnit}` : normalizedName ? `${normalizedName}|${safeAmount}|${normalizedUnit}` : null;
+
+  const cached = getCachedEstimate(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  if (safeAmount <= 0) {
+    return cacheEstimate(cacheKey, fallbackEstimate({ ingredientName, amount: safeAmount, unit: normalizedUnit }));
+  }
+
+  const detail = await fetchUsdaFoodDetails(fdcId);
+
+  if (!detail) {
+    return cacheEstimate(cacheKey, fallbackEstimate({ ingredientName, amount: safeAmount, unit: normalizedUnit }));
+  }
+
+  const { perGram, referenceGrams } = extractNutrientsFromFood(detail);
+
+  if (!perGram || Object.keys(perGram).length === 0) {
+    return cacheEstimate(cacheKey, fallbackEstimate({ ingredientName, amount: safeAmount, unit: normalizedUnit }));
+  }
+
+  const grams = gramsFromServing(safeAmount, normalizedUnit, detail) || referenceGrams || safeAmount;
+  const nutrients = scaleNutrients(perGram, grams);
+
+  return cacheEstimate(cacheKey, {
+    name: detail.description ? titleCase(detail.description) : ingredientName || 'Ingredient',
+    amount: safeAmount,
+    unit: normalizedUnit,
+    ...nutrients
+  });
 }
 
 function parseImageDataUrl(dataUrl) {
@@ -383,8 +922,22 @@ function jsonResponse(statusCode, body) {
   };
 }
 
+function resolveSubPath(event) {
+  const rawPath = typeof event?.path === 'string' ? event.path : '';
+
+  if (!rawPath) {
+    return '/';
+  }
+
+  const withoutFunctionPrefix = rawPath.replace(/^\/\.netlify\/functions\/api/, '');
+  const withoutApiPrefix = withoutFunctionPrefix.replace(/^\/api/, '');
+  const normalized = withoutApiPrefix.length > 0 ? withoutApiPrefix : '/';
+
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+}
+
 exports.handler = async function handler(event) {
-  const subPath = event.path.replace(/^\/\.netlify\/functions\/api/, '') || '/';
+  const subPath = resolveSubPath(event);
 
   if (event.httpMethod === 'OPTIONS') {
     return {
@@ -411,6 +964,46 @@ exports.handler = async function handler(event) {
     } catch (error) {
       console.error('Failed to analyze meal image via Netlify function:', error);
       return jsonResponse(500, { error: error.message || 'Failed to analyze the meal image.' });
+    }
+  }
+
+  if (subPath === '/ingredient-suggestions' && event.httpMethod === 'POST') {
+    try {
+      const payload = JSON.parse(event.body || '{}');
+      const { type = 'suggestions' } = payload;
+
+      if (type === 'estimate') {
+        const { ingredientName, amount, unit, fdcId } = payload;
+
+        if (!ingredientName || typeof ingredientName !== 'string') {
+          return jsonResponse(400, { error: 'ingredientName is required.' });
+        }
+
+        if (!unit) {
+          return jsonResponse(400, { error: 'unit is required.' });
+        }
+
+        const numericAmount = Number(amount);
+        if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+          return jsonResponse(400, { error: 'amount must be a positive number.' });
+        }
+
+        const estimate = await estimateIngredientWithUsda({
+          ingredientName,
+          amount: numericAmount,
+          unit,
+          fdcId
+        });
+
+        return jsonResponse(200, { data: estimate });
+      }
+
+      const { query = '' } = payload;
+      const suggestions = await fetchUsdaSuggestions(query);
+      return jsonResponse(200, { data: suggestions });
+    } catch (error) {
+      console.error('Failed to provide ingredient suggestions via Netlify function:', error);
+      return jsonResponse(500, { error: error.message || 'Failed to fetch ingredient suggestions.' });
     }
   }
 
