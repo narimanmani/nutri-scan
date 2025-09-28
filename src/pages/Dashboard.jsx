@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Meal } from "@/api/entities";
-import { format, isToday, startOfDay, endOfDay } from "date-fns";
+import { format } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { Camera, TrendingUp, Target, Activity, Plus } from "lucide-react";
+import { Camera, TrendingUp, Target, Activity, Flame } from "lucide-react";
+import { buildDashboardStats } from "@/utils/stats";
 
 import DailyStats from "../components/dashboard/DailyStats";
 import NutritionChart from "../components/dashboard/NutritionChart";
@@ -14,7 +15,6 @@ import CalorieProgress from "../components/dashboard/CalorieProgress";
 
 export default function Dashboard() {
   const [meals, setMeals] = useState([]);
-  const [todayMeals, setTodayMeals] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -26,28 +26,19 @@ export default function Dashboard() {
     try {
       const allMeals = await Meal.list("-created_date", 50);
       setMeals(allMeals);
-      
-      const today = allMeals.filter(meal => 
-        isToday(new Date(meal.meal_date || meal.created_date))
-      );
-      setTodayMeals(today);
     } catch (error) {
       console.error("Error loading meals:", error);
     }
     setIsLoading(false);
   };
 
-  const todayCalories = todayMeals.reduce((sum, meal) => sum + (meal.calories || 0), 0);
-  const weeklyCalories = meals
-    .filter(meal => {
-      const mealDate = new Date(meal.meal_date || meal.created_date);
-      const weekAgo = new Date();
-      weekAgo.setDate(weekAgo.getDate() - 7);
-      return mealDate >= weekAgo;
-    })
-    .reduce((sum, meal) => sum + (meal.calories || 0), 0);
+  const dashboardStats = useMemo(() => buildDashboardStats(meals), [meals]);
 
-  const avgDailyCalories = Math.round(weeklyCalories / 7);
+  const todayCalories = dashboardStats.totals.today.calories;
+  const weeklyCalories = dashboardStats.totals.week.calories;
+  const avgDailyCalories = dashboardStats.averages.weekDailyCalories;
+  const averageMealCalories = dashboardStats.averages.mealCalories;
+  const totalMeals = dashboardStats.counts.total;
 
   return (
     <div className="p-4 md:p-8 min-h-screen">
@@ -75,7 +66,7 @@ export default function Dashboard() {
           <Card className="bg-white border-0 shadow-lg hover:shadow-xl transition-all duration-300">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-medium text-gray-600">Today's Calories</CardTitle>
+                <CardTitle className="text-sm font-medium text-gray-600">Today&apos;s Calories</CardTitle>
                 <div className="p-2 bg-emerald-100 rounded-lg">
                   <Activity className="w-4 h-4 text-emerald-600" />
                 </div>
@@ -84,7 +75,7 @@ export default function Dashboard() {
             <CardContent>
               <div className="text-3xl font-bold text-gray-900 mb-2">{todayCalories}</div>
               <p className="text-sm text-gray-500">
-                {todayMeals.length} meals logged
+                {dashboardStats.counts.today} meals logged today
               </p>
             </CardContent>
           </Card>
@@ -92,16 +83,16 @@ export default function Dashboard() {
           <Card className="bg-white border-0 shadow-lg hover:shadow-xl transition-all duration-300">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-medium text-gray-600">Weekly Average</CardTitle>
+                <CardTitle className="text-sm font-medium text-gray-600">Last 7 Days</CardTitle>
                 <div className="p-2 bg-blue-100 rounded-lg">
                   <TrendingUp className="w-4 h-4 text-blue-600" />
                 </div>
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-gray-900 mb-2">{avgDailyCalories}</div>
+              <div className="text-3xl font-bold text-gray-900 mb-2">{weeklyCalories}</div>
               <p className="text-sm text-gray-500">
-                calories per day
+                Avg {avgDailyCalories} cal/day · {dashboardStats.counts.weekActiveDays || 0} active days
               </p>
             </CardContent>
           </Card>
@@ -116,9 +107,9 @@ export default function Dashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-gray-900 mb-2">{meals.length}</div>
+              <div className="text-3xl font-bold text-gray-900 mb-2">{totalMeals}</div>
               <p className="text-sm text-gray-500">
-                meals tracked
+                Last meal {dashboardStats.lastMealDate ? format(dashboardStats.lastMealDate, 'MMM d, yyyy') : '—'}
               </p>
             </CardContent>
           </Card>
@@ -126,30 +117,37 @@ export default function Dashboard() {
           <Card className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-300">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-medium text-emerald-100">Daily Goal</CardTitle>
+                <CardTitle className="text-sm font-medium text-emerald-100">Avg Calories / Meal</CardTitle>
                 <div className="p-2 bg-white/20 rounded-lg">
-                  <Plus className="w-4 h-4 text-white" />
+                  <Flame className="w-4 h-4 text-white" />
                 </div>
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold mb-2">2000</div>
+              <div className="text-3xl font-bold mb-2">{averageMealCalories}</div>
               <p className="text-sm text-emerald-100">
-                calories target
+                based on {totalMeals} meals logged
               </p>
             </CardContent>
           </Card>
         </div>
 
+        <DailyStats
+          calories={todayCalories}
+          protein={dashboardStats.totals.today.protein}
+          carbs={dashboardStats.totals.today.carbs}
+          fat={dashboardStats.totals.today.fat}
+        />
+
         {/* Main Content Grid */}
         <div className="grid lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-8">
-            <CalorieProgress 
+            <CalorieProgress
               current={todayCalories}
               target={2000}
-              meals={todayMeals}
+              meals={dashboardStats.todayMeals}
             />
-            <NutritionChart meals={todayMeals} isLoading={isLoading} />
+            <NutritionChart meals={dashboardStats.todayMeals} isLoading={isLoading} />
           </div>
           <div>
             <RecentMeals meals={meals.slice(0, 8)} isLoading={isLoading} />
