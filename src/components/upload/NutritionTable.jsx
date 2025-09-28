@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Save, Edit3, Loader2, ImagePlus, Plus, Trash2, ChevronDown, ChevronUp } from "lucide-react";
 import { getDataUrlFromFile } from "@/api/openaiClient";
+import { fetchIngredientSuggestions, estimateIngredientNutrition } from "@/api/ingredientSuggestions";
 
 const NUTRIENT_FIELDS = [
   'calories',
@@ -223,17 +224,237 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
   const [editedData, setEditedData] = useState(normalizeMeal(initialData));
   const [expandedIngredientId, setExpandedIngredientId] = useState(null);
   const fileInputRef = useRef(null);
+  const [ingredientSuggestions, setIngredientSuggestions] = useState({});
+  const [suggestionsLoading, setSuggestionsLoading] = useState({});
+  const [selectedSuggestions, setSelectedSuggestions] = useState({});
+  const [estimateLoading, setEstimateLoading] = useState({});
+  const suggestionTimersRef = useRef({});
+  const latestQueryRef = useRef({});
+  const lastEstimateSignatureRef = useRef({});
 
   useEffect(() => {
     setEditedData(normalizeMeal(initialData));
     setExpandedIngredientId(null);
+    setIngredientSuggestions({});
+    setSuggestionsLoading({});
+    setSelectedSuggestions({});
+    setEstimateLoading({});
+    suggestionTimersRef.current = {};
+    latestQueryRef.current = {};
+    lastEstimateSignatureRef.current = {};
   }, [initialData]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(suggestionTimersRef.current || {}).forEach((timerId) => {
+        if (timerId) {
+          clearTimeout(timerId);
+        }
+      });
+    };
+  }, []);
+
+  const clearIngredientAiState = (id) => {
+    setIngredientSuggestions((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setSuggestionsLoading((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setSelectedSuggestions((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setEstimateLoading((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    delete suggestionTimersRef.current[id];
+    delete latestQueryRef.current[id];
+    delete lastEstimateSignatureRef.current[id];
+  };
+
+  const scheduleSuggestionFetch = (id, query) => {
+    if (suggestionTimersRef.current[id]) {
+      clearTimeout(suggestionTimersRef.current[id]);
+    }
+
+    if (!query || query.trim().length < 2) {
+      latestQueryRef.current[id] = query || '';
+      setIngredientSuggestions((prev) => ({ ...prev, [id]: [] }));
+      setSuggestionsLoading((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      return;
+    }
+
+    latestQueryRef.current[id] = query;
+    suggestionTimersRef.current[id] = setTimeout(async () => {
+      setSuggestionsLoading((prev) => ({ ...prev, [id]: true }));
+      try {
+        const suggestions = await fetchIngredientSuggestions(query);
+        if (latestQueryRef.current[id] !== query) {
+          return;
+        }
+        setIngredientSuggestions((prev) => ({ ...prev, [id]: suggestions }));
+      } catch (error) {
+        console.error('Failed to fetch ingredient suggestions:', error);
+        setIngredientSuggestions((prev) => ({ ...prev, [id]: [] }));
+      } finally {
+        setSuggestionsLoading((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }
+    }, 350);
+  };
+
+  const triggerNutritionEstimate = async (id, ingredient, suggestion) => {
+    if (!suggestion || !ingredient) {
+      return;
+    }
+
+    const amount = Number(ingredient.amount);
+    if (!ingredient.unit || !Number.isFinite(amount) || amount <= 0) {
+      lastEstimateSignatureRef.current[id] = null;
+      return;
+    }
+
+    const signature = `${suggestion.name}|${amount}|${ingredient.unit}`;
+    if (lastEstimateSignatureRef.current[id] === signature) {
+      return;
+    }
+
+    lastEstimateSignatureRef.current[id] = signature;
+    setEstimateLoading((prev) => ({ ...prev, [id]: true }));
+
+    try {
+      const estimate = await estimateIngredientNutrition({
+        ingredientName: suggestion.name,
+        amount,
+        unit: ingredient.unit
+      });
+
+      if (!estimate) {
+        return;
+      }
+
+      setEditedData((prev) => {
+        const ingredients = prev.ingredients.map((entry) => {
+          if (entry.id !== id) {
+            return entry;
+          }
+
+          const updated = { ...entry };
+          NUTRIENT_FIELDS.forEach((field) => {
+            if (field === 'amount' || field === 'unit') {
+              return;
+            }
+            const value = Number(estimate[field]);
+            if (Number.isFinite(value) && value >= 0) {
+              updated[field] = value;
+            }
+          });
+
+          updated._perUnit = computePerUnit(updated);
+          return updated;
+        });
+
+        const totals = calculateTotals(ingredients);
+        return {
+          ...prev,
+          ...totals,
+          ingredients
+        };
+      });
+    } catch (error) {
+      console.error('Failed to estimate ingredient nutrition:', error);
+      lastEstimateSignatureRef.current[id] = null;
+    } finally {
+      setEstimateLoading((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }
+  };
+
+  useEffect(() => {
+    (editedData.ingredients || []).forEach((ingredient) => {
+      const suggestion = selectedSuggestions[ingredient.id];
+      if (!suggestion) {
+        return;
+      }
+      triggerNutritionEstimate(ingredient.id, ingredient, suggestion);
+    });
+  }, [editedData.ingredients, selectedSuggestions]);
 
   const handleBasicFieldChange = (field, value) => {
     setEditedData((prev) => ({
       ...prev,
       [field]: value
     }));
+  };
+
+  const handleIngredientNameInput = (id, value) => {
+    const nextValue = value;
+
+    setSelectedSuggestions((prev) => {
+      const current = prev[id];
+      if (!current) {
+        return prev;
+      }
+
+      if (nextValue.trim().toLowerCase() !== current.name.toLowerCase()) {
+        const next = { ...prev };
+        delete next[id];
+        lastEstimateSignatureRef.current[id] = null;
+        return next;
+      }
+
+      return prev;
+    });
+
+    handleIngredientChange(id, 'name', nextValue);
+    scheduleSuggestionFetch(id, nextValue);
+  };
+
+  const handleSuggestionSelect = (id, suggestion) => {
+    setIngredientSuggestions((prev) => ({ ...prev, [id]: [] }));
+    setSelectedSuggestions((prev) => ({ ...prev, [id]: suggestion }));
+    latestQueryRef.current[id] = suggestion.name;
+    lastEstimateSignatureRef.current[id] = null;
+
+    setEditedData((prev) => {
+      const ingredients = prev.ingredients.map((ingredient) => {
+        if (ingredient.id !== id) {
+          return ingredient;
+        }
+
+        const updated = { ...ingredient, name: suggestion.name };
+        if (suggestion.typical_unit) {
+          updated.unit = canonicalizeUnit(suggestion.typical_unit);
+        }
+        updated._perUnit = computePerUnit(updated);
+        return updated;
+      });
+
+      const totals = calculateTotals(ingredients);
+      return {
+        ...prev,
+        ...totals,
+        ingredients
+      };
+    });
   };
 
   const handleIngredientChange = (id, field, value) => {
@@ -316,6 +537,7 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
   };
 
   const handleRemoveIngredient = (id) => {
+    clearIngredientAiState(id);
     setExpandedIngredientId((prevExpanded) => (prevExpanded === id ? null : prevExpanded));
     setEditedData((prev) => {
       const remaining = (prev.ingredients || []).filter((ingredient) => ingredient.id !== id);
@@ -391,11 +613,11 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
           </p>
         </CardHeader>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto overflow-y-visible">
             <table className="min-w-full divide-y divide-gray-100 text-sm">
               <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
                 <tr>
-                  <th className="px-6 py-3 text-left">Ingredient</th>
+                  <th className="px-6 py-3 text-left w-[22rem]">Ingredient</th>
                   <th className="px-4 py-3 text-left w-32">Amount</th>
                   <th className="px-4 py-3 text-left w-36">Unit</th>
                   <th className="px-4 py-3 text-left w-28">Calories</th>
@@ -406,150 +628,207 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
-                {(editedData.ingredients || []).map((ingredient) => (
-                  <React.Fragment key={ingredient.id}>
-                    <tr>
-                      <td className="px-6 py-4 align-top">
-                        <Input
-                          value={ingredient.name}
-                          onChange={(event) => handleIngredientChange(ingredient.id, 'name', event.target.value)}
-                          placeholder="e.g. Grilled chicken"
-                          className="rounded-xl border-gray-200"
-                        />
-                        <p className="text-xs text-gray-400 mt-2">
-                          {formatUnitLabel(ingredient.unit)} detected
-                        </p>
-                      </td>
-                      <td className="px-4 py-4 align-top">
-                        <Input
-                          type="number"
-                          min="0"
-                          step="1"
-                          value={ingredient.amount}
-                          onChange={(event) => handleIngredientChange(ingredient.id, 'amount', event.target.value)}
-                          className="rounded-xl border-gray-200"
-                        />
-                      </td>
-                      <td className="px-4 py-4 align-top">
-                        <Select
-                          value={ingredient.unit}
-                          onValueChange={(value) => handleIngredientChange(ingredient.id, 'unit', value)}
-                        >
-                          <SelectTrigger className="rounded-xl border-gray-200">
-                            <SelectValue placeholder="Select unit" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {UNIT_OPTIONS.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </td>
-                      <td className="px-4 py-4 align-top">
-                        <Input
-                          type="number"
-                          min="0"
-                          step="1"
-                          value={ingredient.calories}
-                          onChange={(event) => handleIngredientChange(ingredient.id, 'calories', event.target.value)}
-                          className="rounded-xl border-gray-200"
-                        />
-                      </td>
-                      <td className="px-4 py-4 align-top">
-                        <Input
-                          type="number"
-                          min="0"
-                          step="0.1"
-                          value={ingredient.protein}
-                          onChange={(event) => handleIngredientChange(ingredient.id, 'protein', event.target.value)}
-                          className="rounded-xl border-gray-200"
-                        />
-                      </td>
-                      <td className="px-4 py-4 align-top">
-                        <Input
-                          type="number"
-                          min="0"
-                          step="0.1"
-                          value={ingredient.carbs}
-                          onChange={(event) => handleIngredientChange(ingredient.id, 'carbs', event.target.value)}
-                          className="rounded-xl border-gray-200"
-                        />
-                      </td>
-                      <td className="px-4 py-4 align-top">
-                        <Input
-                          type="number"
-                          min="0"
-                          step="0.1"
-                          value={ingredient.fat}
-                          onChange={(event) => handleIngredientChange(ingredient.id, 'fat', event.target.value)}
-                          className="rounded-xl border-gray-200"
-                        />
-                      </td>
-                      <td className="px-4 py-4 align-top">
-                        <div className="flex items-center justify-end gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="icon"
-                            className="h-9 w-9 rounded-xl border-gray-200"
-                            onClick={() =>
-                              setExpandedIngredientId((prev) =>
-                                prev === ingredient.id ? null : ingredient.id
-                              )
-                            }
-                          >
-                            {expandedIngredientId === ingredient.id ? (
-                              <ChevronUp className="h-4 w-4" />
-                            ) : (
-                              <ChevronDown className="h-4 w-4" />
-                            )}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="destructive"
-                            size="icon"
-                            className="h-9 w-9 rounded-xl"
-                            onClick={() => handleRemoveIngredient(ingredient.id)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                    {expandedIngredientId === ingredient.id && (
+                {(editedData.ingredients || []).map((ingredient) => {
+                  const suggestionsForIngredient = ingredientSuggestions[ingredient.id] || [];
+                  const isFetchingSuggestions = Boolean(suggestionsLoading[ingredient.id]);
+                  const selectedSuggestion = selectedSuggestions[ingredient.id];
+
+                  return (
+                    <React.Fragment key={ingredient.id}>
                       <tr>
-                        <td colSpan={8} className="px-6 pb-6">
-                          <div className="mt-2 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
-                            <p className="text-sm font-medium text-emerald-800">
-                              Micronutrients
-                            </p>
-                            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                              {MICRO_NUTRIENTS.map((field) => (
-                                <div key={field} className="space-y-1">
-                                  <Label className="text-xs font-medium text-emerald-900">
-                                    {nutritionFields.find((item) => item.key === field)?.label}
-                                  </Label>
-                                  <Input
-                                    type="number"
-                                    min="0"
-                                    step={field === 'sodium' || field === 'potassium' || field === 'calcium' ? '1' : '0.1'}
-                                    value={ingredient[field]}
-                                    onChange={(event) =>
-                                      handleIngredientChange(ingredient.id, field, event.target.value)
-                                    }
-                                    className="rounded-xl border-emerald-100 bg-white"
-                                  />
-                                </div>
+                        <td className="px-6 py-4 align-top relative w-[22rem]">
+                          <div className="relative">
+                            <Input
+                              value={ingredient.name}
+                              onChange={(event) => handleIngredientNameInput(ingredient.id, event.target.value)}
+                              placeholder="e.g. Grilled chicken"
+                              className="w-full rounded-xl border-gray-200 pr-10"
+                            />
+                            {isFetchingSuggestions && (
+                              <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-gray-400" />
+                            )}
+                            {(isFetchingSuggestions || suggestionsForIngredient.length > 0) && (
+                              <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-64 min-w-[20rem] overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-xl">
+                                {suggestionsForIngredient.length === 0 ? (
+                                  <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-500">
+                                    {isFetchingSuggestions ? (
+                                      <>
+                                        <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                                        <span>Fetching suggestions…</span>
+                                      </>
+                                    ) : (
+                                      <span>No suggestions found</span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <ul className="divide-y divide-gray-100">
+                                    {suggestionsForIngredient.map((suggestion) => (
+                                      <li key={`${ingredient.id}-${suggestion.name}`}>
+                                        <button
+                                          type="button"
+                                          className="block w-full px-4 py-3 text-left hover:bg-gray-50"
+                                          onClick={() => handleSuggestionSelect(ingredient.id, suggestion)}
+                                        >
+                                          <div className="font-medium text-gray-900">{suggestion.name}</div>
+                                          {suggestion.description && (
+                                            <div className="text-xs text-gray-500 mt-1">{suggestion.description}</div>
+                                          )}
+                                          {suggestion.example_portion && (
+                                            <div className="text-xs text-gray-400 mt-1">
+                                              Example: {suggestion.example_portion}
+                                            </div>
+                                          )}
+                                        </button>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-400 mt-2">
+                            {formatUnitLabel(ingredient.unit)} detected
+                          </p>
+                          {selectedSuggestion && (
+                            <p className="text-xs text-emerald-600 mt-1">AI suggestion: {selectedSuggestion.name}</p>
+                          )}
+                        </td>
+                        <td className="px-4 py-4 align-top">
+                          <Input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={ingredient.amount}
+                            onChange={(event) => handleIngredientChange(ingredient.id, 'amount', event.target.value)}
+                            className="rounded-xl border-gray-200"
+                          />
+                        </td>
+                        <td className="px-4 py-4 align-top">
+                          <Select
+                            value={ingredient.unit}
+                            onValueChange={(value) => handleIngredientChange(ingredient.id, 'unit', value)}
+                          >
+                            <SelectTrigger className="rounded-xl border-gray-200">
+                              <SelectValue placeholder="Select unit" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {UNIT_OPTIONS.map((option) => (
+                                <SelectItem key={option.value} value={option.value}>
+                                  {option.label}
+                                </SelectItem>
                               ))}
-                            </div>
+                            </SelectContent>
+                          </Select>
+                        </td>
+                        <td className="px-4 py-4 align-top">
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={ingredient.calories}
+                              onChange={(event) => handleIngredientChange(ingredient.id, 'calories', event.target.value)}
+                              className="rounded-xl border-gray-200"
+                            />
+                            {estimateLoading[ingredient.id] && (
+                              <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-4 align-top">
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={ingredient.protein}
+                            onChange={(event) => handleIngredientChange(ingredient.id, 'protein', event.target.value)}
+                            className="rounded-xl border-gray-200"
+                          />
+                        </td>
+                        <td className="px-4 py-4 align-top">
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={ingredient.carbs}
+                            onChange={(event) => handleIngredientChange(ingredient.id, 'carbs', event.target.value)}
+                            className="rounded-xl border-gray-200"
+                          />
+                        </td>
+                        <td className="px-4 py-4 align-top">
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={ingredient.fat}
+                            onChange={(event) => handleIngredientChange(ingredient.id, 'fat', event.target.value)}
+                            className="rounded-xl border-gray-200"
+                          />
+                        </td>
+                        <td className="px-4 py-4 align-top">
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              className="h-9 w-9 rounded-xl border-gray-200"
+                              onClick={() =>
+                                setExpandedIngredientId((prev) =>
+                                  prev === ingredient.id ? null : ingredient.id
+                                )
+                              }
+                            >
+                              {expandedIngredientId === ingredient.id ? (
+                                <ChevronUp className="h-4 w-4" />
+                              ) : (
+                                <ChevronDown className="h-4 w-4" />
+                              )}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              size="icon"
+                              className="h-9 w-9 rounded-xl"
+                              onClick={() => handleRemoveIngredient(ingredient.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
                           </div>
                         </td>
                       </tr>
-                    )}
-                  </React.Fragment>
-                ))}
+                      {expandedIngredientId === ingredient.id && (
+                        <tr>
+                          <td colSpan={8} className="px-6 pb-6">
+                            <div className="mt-2 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
+                              <p className="text-sm font-medium text-emerald-800">
+                                Micronutrients
+                              </p>
+                              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                                {MICRO_NUTRIENTS.map((field) => (
+                                  <div key={field} className="space-y-1">
+                                    <Label className="text-xs font-medium text-emerald-900">
+                                      {nutritionFields.find((item) => item.key === field)?.label}
+                                    </Label>
+                                    <Input
+                                      type="number"
+                                      min="0"
+                                      step={field === 'sodium' || field === 'potassium' || field === 'calcium' ? '1' : '0.1'}
+                                      value={ingredient[field]}
+                                      onChange={(event) =>
+                                        handleIngredientChange(ingredient.id, field, event.target.value)
+                                      }
+                                      className="rounded-xl border-emerald-100 bg-white/70 focus:border-emerald-300 focus:ring-emerald-200"
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
