@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const BASE_SILHOUETTES = {
   front: 'https://wger.de/static/images/muscles/muscular_system_front.svg',
@@ -10,6 +10,8 @@ const OVERLAY_BASE_STYLE = {
   backgroundSize: 'contain',
   backgroundPosition: 'center',
 };
+
+const ALPHA_THRESHOLD = 25;
 
 function buildMaskStyle(src = '') {
   if (!src) return {};
@@ -53,10 +55,148 @@ export default function MuscleSelector({
   error = '',
 }) {
   const [hoveredId, setHoveredId] = useState(null);
+  const baseImageRef = useRef(null);
+  const highlightCacheRef = useRef(new Map());
+  const [, forceRender] = useState(0);
 
   const musclesForView = useMemo(
     () => muscles.filter((muscle) => muscle.view === view),
     [muscles, view]
+  );
+
+  useEffect(() => {
+    setHoveredId(null);
+  }, [view]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    let isCancelled = false;
+    const cache = highlightCacheRef.current;
+
+    musclesForView.forEach((muscle) => {
+      const src = muscle.highlightUrl || muscle.secondaryUrl;
+      if (!src || cache.has(src)) {
+        return;
+      }
+
+      const image = new Image();
+      image.crossOrigin = 'anonymous';
+
+      image.onload = () => {
+        if (isCancelled) return;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+
+        if (!context) {
+          cache.set(src, null);
+          forceRender((value) => value + 1);
+          return;
+        }
+
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0);
+
+        try {
+          const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+          cache.set(src, {
+            width: canvas.width,
+            height: canvas.height,
+            data: imageData.data,
+          });
+        } catch (err) {
+          cache.set(src, null);
+        }
+
+        forceRender((value) => value + 1);
+      };
+
+      image.onerror = () => {
+        if (isCancelled) return;
+        cache.set(src, null);
+        forceRender((value) => value + 1);
+      };
+
+      image.src = src;
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [musclesForView]);
+
+  const resolvePointMuscle = useCallback(
+    (event) => {
+      if (!baseImageRef.current || status !== 'success') {
+        return null;
+      }
+
+      const rect = baseImageRef.current.getBoundingClientRect();
+      const x = (event.clientX - rect.left) / rect.width;
+      const y = (event.clientY - rect.top) / rect.height;
+
+      if (Number.isNaN(x) || Number.isNaN(y) || x < 0 || x > 1 || y < 0 || y > 1) {
+        return null;
+      }
+
+      for (let index = musclesForView.length - 1; index >= 0; index -= 1) {
+        const muscle = musclesForView[index];
+        const src = muscle.highlightUrl || muscle.secondaryUrl;
+        if (!src) continue;
+
+        const cacheEntry = highlightCacheRef.current.get(src);
+        if (!cacheEntry || !cacheEntry.data) continue;
+
+        const { width, height, data } = cacheEntry;
+        if (!width || !height || !data) continue;
+
+        const pixelX = Math.min(width - 1, Math.max(0, Math.round(x * width)));
+        const pixelY = Math.min(height - 1, Math.max(0, Math.round(y * height)));
+        const offset = (pixelY * width + pixelX) * 4 + 3;
+
+        if (data[offset] > ALPHA_THRESHOLD) {
+          return muscle;
+        }
+      }
+
+      return null;
+    },
+    [musclesForView, status]
+  );
+
+  const handlePointerMove = useCallback(
+    (event) => {
+      const muscle = resolvePointMuscle(event);
+      setHoveredId(muscle ? muscle.id : null);
+    },
+    [resolvePointMuscle]
+  );
+
+  const handlePointerLeave = useCallback(() => {
+    setHoveredId(null);
+  }, []);
+
+  const handlePointerDown = useCallback(
+    (event) => {
+      const muscle = resolvePointMuscle(event);
+      if (muscle) {
+        setHoveredId(muscle.id);
+      }
+    },
+    [resolvePointMuscle]
+  );
+
+  const handleClick = useCallback(
+    (event) => {
+      const muscle = resolvePointMuscle(event);
+      if (muscle) {
+        onToggle?.(muscle);
+      }
+    },
+    [onToggle, resolvePointMuscle]
   );
 
   const activeMuscle = useMemo(() => {
@@ -75,13 +215,23 @@ export default function MuscleSelector({
 
   return (
     <div className="space-y-6">
-      <div className="relative mx-auto aspect-[3/5] w-full max-w-sm overflow-hidden rounded-[2.25rem] border border-emerald-100 bg-gradient-to-b from-emerald-50 via-white to-emerald-100 shadow-inner">
+      <div
+        className="relative mx-auto aspect-[3/5] w-full max-w-sm overflow-hidden rounded-[2.25rem] border border-emerald-100 bg-gradient-to-b from-emerald-50 via-white to-emerald-100 shadow-inner"
+        onPointerMove={handlePointerMove}
+        onPointerLeave={handlePointerLeave}
+        onPointerDown={handlePointerDown}
+        onClick={handleClick}
+        role="presentation"
+        style={{ cursor: hoveredId != null ? 'pointer' : 'default' }}
+      >
         {baseImage ? (
           <img
             src={baseImage}
             alt={`${view} anatomy silhouette`}
-            className="h-full w-full object-contain"
+            ref={baseImageRef}
+            className="h-full w-full select-none object-contain"
             style={{ filter: 'grayscale(1) saturate(0.7) brightness(1.05)' }}
+            draggable={false}
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center text-sm text-emerald-500">
@@ -106,26 +256,15 @@ export default function MuscleSelector({
           const overlayStyle = buildOverlayStyle(highlight, opacity);
 
           return (
-            <button
+            <div
               key={muscle.id}
-              type="button"
-              aria-pressed={isSelected}
               title={muscle.label}
-              onClick={() => onToggle?.(muscle)}
-              onMouseEnter={() => setHoveredId(muscle.id)}
-              onMouseLeave={() => setHoveredId(null)}
-              onFocus={() => setHoveredId(muscle.id)}
-              onBlur={() => setHoveredId(null)}
-              className="absolute inset-0 focus-visible:outline-none"
-              style={{
-                ...maskStyle,
-                cursor: 'pointer',
-              }}
+              className="pointer-events-none absolute inset-0"
+              style={maskStyle}
             >
-              <span className="sr-only">Toggle {muscle.label}</span>
               <span
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-0 transition-opacity duration-200"
+                className="absolute inset-0 transition-opacity duration-200"
                 style={{
                   ...overlayStyle,
                   filter: isSelected
@@ -133,7 +272,7 @@ export default function MuscleSelector({
                     : 'drop-shadow(0 10px 12px rgba(45,212,191,0.2))',
                 }}
               />
-            </button>
+            </div>
           );
         })}
 
