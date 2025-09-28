@@ -12,6 +12,7 @@ import { useToast } from '@/components/ui/use-toast';
 
 import DateNavigator from '@/components/dashboard/DateNavigator';
 import AddDietPlanDialog from '@/components/diet/AddDietPlanDialog';
+import MacroTrendCharts from '@/components/diet/MacroTrendCharts';
 
 import dietPlanTemplates from '@/data/dietPlans.json';
 import { buildDashboardStats } from '@/utils/stats';
@@ -412,6 +413,14 @@ export default function DietPlans() {
                 )}
               </CardContent>
             </Card>
+
+            {selectedPlan && (
+              <MacroTrendCharts
+                plan={selectedPlan}
+                meals={meals}
+                referenceDate={selectedDate}
+              />
+            )}
 
             <Card className="border-0 shadow-lg">
               <CardHeader className="border-b border-gray-100">
