@@ -41,48 +41,55 @@ function createNetlifyFunctionProxyPlugin() {
       })
     })
 
+  const mountPaths = ['/api', '/.netlify/functions/api']
+
+  const createMiddleware = (server, mountPath) =>
+    async (req, res) => {
+      try {
+        const body = await readRequestBody(req)
+        const relativePath = req.url || '/'
+
+        const event = {
+          path: `/.netlify/functions/api${relativePath}`,
+          rawUrl: `http://localhost${mountPath}${relativePath}`,
+          httpMethod: req.method || 'GET',
+          headers: req.headers,
+          body,
+          isBase64Encoded: false,
+        }
+
+        const result = await handler(event)
+
+        res.statusCode = result?.statusCode ?? 200
+
+        const headers = result?.headers || {}
+        Object.entries(headers).forEach(([key, value]) => {
+          if (typeof value !== 'undefined') {
+            res.setHeader(key, value)
+          }
+        })
+
+        const responseBody = result?.body ?? ''
+        res.end(responseBody)
+      } catch (error) {
+        server.config.logger.error(
+          `[netlify-function-proxy] Failed to invoke api function: ${error?.stack || error}`
+        )
+
+        if (!res.headersSent) {
+          res.statusCode = 500
+          res.setHeader('Content-Type', 'application/json')
+        }
+
+        res.end(JSON.stringify({ error: 'Local Netlify function proxy failed.' }))
+      }
+    }
+
   return {
     name: 'netlify-function-proxy',
     configureServer(server) {
-      server.middlewares.use('/api', async (req, res) => {
-        try {
-          const body = await readRequestBody(req)
-          const relativePath = req.url || '/'
-
-          const event = {
-            path: `/.netlify/functions/api${relativePath}`,
-            rawUrl: `http://localhost${relativePath}`,
-            httpMethod: req.method || 'GET',
-            headers: req.headers,
-            body,
-            isBase64Encoded: false,
-          }
-
-          const result = await handler(event)
-
-          res.statusCode = result?.statusCode ?? 200
-
-          const headers = result?.headers || {}
-          Object.entries(headers).forEach(([key, value]) => {
-            if (typeof value !== 'undefined') {
-              res.setHeader(key, value)
-            }
-          })
-
-          const responseBody = result?.body ?? ''
-          res.end(responseBody)
-        } catch (error) {
-          server.config.logger.error(
-            `[netlify-function-proxy] Failed to invoke api function: ${error?.stack || error}`
-          )
-
-          if (!res.headersSent) {
-            res.statusCode = 500
-            res.setHeader('Content-Type', 'application/json')
-          }
-
-          res.end(JSON.stringify({ error: 'Local Netlify function proxy failed.' }))
-        }
+      mountPaths.forEach((mountPath) => {
+        server.middlewares.use(mountPath, createMiddleware(server, mountPath))
       })
     },
   }
