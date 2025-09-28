@@ -1,11 +1,26 @@
 const BASE_URL = 'https://wger.de/api/v2';
 
+const rawApiKey = import.meta.env?.VITE_WGER_API_KEY;
+const API_KEY = typeof rawApiKey === 'string' ? rawApiKey.trim() : '';
+
+function buildHeaders(extra) {
+  const headers = {
+    Accept: 'application/json',
+    ...(extra || {}),
+  };
+
+  if (API_KEY) {
+    headers.Authorization = `Token ${API_KEY}`;
+  }
+
+  return headers;
+}
+
 async function fetchJson(url, options = {}) {
+  const { headers: extraHeaders, ...rest } = options;
   const response = await fetch(url, {
-    headers: {
-      Accept: 'application/json',
-    },
-    ...options,
+    ...rest,
+    headers: buildHeaders(extraHeaders),
   });
 
   if (!response.ok) {
@@ -95,3 +110,16 @@ export async function generateWorkoutPlanFromMuscles(
 }
 
 export const WGER_BASE_URL = BASE_URL;
+
+export async function fetchAllMuscles({ signal } = {}) {
+  const muscles = [];
+  let nextUrl = `${BASE_URL}/muscle/?limit=200`;
+
+  while (nextUrl) {
+    const data = await fetchJson(nextUrl, { signal });
+    muscles.push(...(data.results || []));
+    nextUrl = data.next;
+  }
+
+  return muscles;
+}

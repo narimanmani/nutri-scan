@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { fetchAllMuscles } from '@/api/wger.js';
 
 export const MUSCLE_GROUPS = [
   {
@@ -117,19 +118,142 @@ function getMusclesForView(view) {
   return MUSCLE_GROUPS.filter((group) => group.view === view || group.view === 'both');
 }
 
+function buildMuscleVisuals(records = []) {
+  const byId = new Map();
+  records.forEach((record) => {
+    if (record?.id != null) {
+      byId.set(record.id, record);
+    }
+  });
+
+  const resolveBaseImage = (isFront) => {
+    for (const record of records) {
+      if (record?.image_url_secondary && Boolean(record.is_front) === isFront) {
+        return record.image_url_secondary;
+      }
+    }
+    return '';
+  };
+
+  const resolveOverlayImage = (group, view) => {
+    const isFront = view === 'front';
+
+    for (const id of group.apiIds) {
+      const record = byId.get(id);
+      if (!record) continue;
+      if (Boolean(record.is_front) === isFront && record.image_url_main) {
+        return record.image_url_main;
+      }
+    }
+
+    for (const id of group.apiIds) {
+      const record = byId.get(id);
+      if (!record) continue;
+      if (record.image_url_secondary) {
+        return record.image_url_secondary;
+      }
+    }
+
+    for (const id of group.apiIds) {
+      const record = byId.get(id);
+      if (!record) continue;
+      if (record.image_url_main) {
+        return record.image_url_main;
+      }
+    }
+
+    return '';
+  };
+
+  const overlays = new Map();
+  for (const group of MUSCLE_GROUPS) {
+    overlays.set(group.key, {
+      front: resolveOverlayImage(group, 'front'),
+      back: resolveOverlayImage(group, 'back'),
+    });
+  }
+
+  return {
+    base: {
+      front: resolveBaseImage(true),
+      back: resolveBaseImage(false),
+    },
+    overlays,
+  };
+}
+
 export default function MuscleSelector({ view = 'front', selectedKeys = [], onToggle }) {
   const muscles = useMemo(() => getMusclesForView(view), [view]);
+  const [visuals, setVisuals] = useState({ status: 'idle', data: null, error: '' });
+  const [hoveredKey, setHoveredKey] = useState('');
+
+  useEffect(() => {
+    let isActive = true;
+    const controller = new AbortController();
+
+    setVisuals((prev) => ({ ...prev, status: 'loading', error: '' }));
+
+    fetchAllMuscles({ signal: controller.signal })
+      .then((records) => {
+        if (!isActive) return;
+        setVisuals({ status: 'success', data: buildMuscleVisuals(records), error: '' });
+      })
+      .catch((error) => {
+        if (!isActive || error.name === 'AbortError') return;
+        setVisuals({ status: 'error', data: null, error: error.message || 'Unable to load anatomy visuals.' });
+      });
+
+    return () => {
+      isActive = false;
+      controller.abort();
+    };
+  }, []);
+
+  const baseImage = visuals.data?.base?.[view] || '';
+  const overlaysForView = visuals.data?.overlays || new Map();
+  const previewKeys = useMemo(() => {
+    const keys = new Set(selectedKeys);
+    if (hoveredKey) {
+      keys.add(hoveredKey);
+    }
+    return Array.from(keys);
+  }, [hoveredKey, selectedKeys]);
+
+  const visibleOverlayImages = previewKeys
+    .map((key) => overlaysForView.get(key)?.[view])
+    .filter(Boolean);
 
   return (
     <div className="space-y-6">
-      <div className="relative mx-auto aspect-[3/5] w-full max-w-sm overflow-hidden rounded-3xl bg-gradient-to-b from-emerald-100 via-white to-emerald-50 shadow-inner">
+      <div className="relative mx-auto aspect-[3/5] w-full max-w-sm overflow-hidden rounded-3xl border border-emerald-100 bg-white/80 shadow-inner">
         <div className="absolute inset-0">
-          <div className="absolute left-1/2 top-0 h-full w-32 -translate-x-1/2 rounded-full bg-gradient-to-b from-emerald-200/70 via-emerald-100/40 to-emerald-200/70 blur-3xl" />
-          <div className="absolute inset-0 flex flex-col items-center justify-between py-6 text-emerald-900/40">
-            <div className="text-lg font-semibold uppercase tracking-[0.35em]">{view}</div>
-            <div className="h-full w-px bg-gradient-to-b from-transparent via-emerald-200 to-transparent" />
-            <div className="text-sm uppercase tracking-[0.3em]">anatomy</div>
-          </div>
+          {baseImage ? (
+            <img
+              src={baseImage}
+              alt={`${view} anatomy silhouette`}
+              className="h-full w-full object-contain"
+              style={{ filter: 'grayscale(1) saturate(0) brightness(1.1)' }}
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center bg-gradient-to-b from-emerald-50 via-white to-emerald-100 text-sm text-emerald-500">
+              {visuals.status === 'loading' ? 'Loading anatomy…' : 'Anatomy illustration unavailable'}
+            </div>
+          )}
+
+          {visibleOverlayImages.map((src, index) => (
+            <img
+              key={`${src}-${index}`}
+              src={src}
+              alt="Selected muscle highlight"
+              className="pointer-events-none absolute inset-0 h-full w-full object-contain mix-blend-multiply opacity-90 transition"
+            />
+          ))}
+
+          {visuals.status === 'error' && (
+            <div className="absolute inset-x-4 bottom-4 rounded-xl border border-yellow-300 bg-yellow-50/95 px-3 py-2 text-center text-xs font-medium text-yellow-700 shadow-sm">
+              Unable to load anatomy art from wger.
+            </div>
+          )}
         </div>
 
         {muscles.map((muscle) => {
@@ -148,11 +272,13 @@ export default function MuscleSelector({ view = 'front', selectedKeys = [], onTo
               key={`${muscle.key}-${view}`}
               type="button"
               onClick={() => onToggle?.(muscle)}
+              onMouseEnter={() => setHoveredKey(muscle.key)}
+              onMouseLeave={() => setHoveredKey('')}
+              onFocus={() => setHoveredKey(muscle.key)}
+              onBlur={() => setHoveredKey('')}
               aria-pressed={isSelected}
-              className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 ${
-                isSelected
-                  ? 'border-emerald-500/80 bg-emerald-400/50 shadow-lg shadow-emerald-500/20'
-                  : 'border-emerald-300/80 bg-white/70 hover:border-emerald-500/80'
+              className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 bg-white/70 transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 ${
+                isSelected ? 'border-emerald-500/80 shadow-lg shadow-emerald-500/20' : 'border-emerald-300/80 hover:border-emerald-500/80'
               }`}
               style={style}
             >
@@ -165,24 +291,42 @@ export default function MuscleSelector({ view = 'front', selectedKeys = [], onTo
       <div className="grid gap-3 text-sm text-emerald-900/80">
         {muscles.map((muscle) => {
           const isSelected = selectedKeys.includes(muscle.key);
+          const overlaySrc = overlaysForView.get(muscle.key)?.[view];
+
           return (
             <button
               key={muscle.key}
               type="button"
               onClick={() => onToggle?.(muscle)}
-              className={`w-full rounded-xl border bg-white/80 px-4 py-3 text-left transition hover:shadow-md ${
-                isSelected
-                  ? 'border-emerald-500/70 shadow-emerald-200'
-                  : 'border-emerald-100 text-emerald-900/70'
+              onMouseEnter={() => setHoveredKey(muscle.key)}
+              onMouseLeave={() => setHoveredKey('')}
+              onFocus={() => setHoveredKey(muscle.key)}
+              onBlur={() => setHoveredKey('')}
+              className={`flex w-full items-center gap-3 rounded-xl border bg-white/80 px-4 py-3 text-left transition hover:shadow-md ${
+                isSelected ? 'border-emerald-500/70 shadow-emerald-200' : 'border-emerald-100 text-emerald-900/70'
               }`}
             >
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-emerald-900">{muscle.label}</span>
-                <span className={`text-xs uppercase tracking-wide ${isSelected ? 'text-emerald-600' : 'text-emerald-400'}`}>
-                  {isSelected ? 'Selected' : view}
-                </span>
+              {overlaySrc ? (
+                <img
+                  src={overlaySrc}
+                  alt=""
+                  aria-hidden="true"
+                  className={`h-12 w-12 flex-shrink-0 rounded-full border border-emerald-100 bg-white object-contain p-1 ${
+                    isSelected ? 'opacity-100' : 'opacity-80'
+                  }`}
+                />
+              ) : (
+                <div className="h-12 w-12 flex-shrink-0 rounded-full border border-emerald-100 bg-gradient-to-br from-emerald-50 to-emerald-100" />
+              )}
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-emerald-900">{muscle.label}</span>
+                  <span className={`text-xs uppercase tracking-wide ${isSelected ? 'text-emerald-600' : 'text-emerald-400'}`}>
+                    {isSelected ? 'Selected' : view}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-emerald-800/70">{muscle.description}</p>
               </div>
-              <p className="mt-1 text-xs text-emerald-800/70">{muscle.description}</p>
             </button>
           );
         })}
