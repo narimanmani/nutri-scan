@@ -297,8 +297,10 @@ export default function MuscleSelector({ view = 'front', selectedKeys = [], onTo
               onFocus={() => setHoveredKey(muscle.key)}
               onBlur={() => setHoveredKey('')}
               aria-pressed={isSelected}
-              className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 bg-white/70 transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 ${
-                isSelected ? 'border-emerald-500/80 shadow-lg shadow-emerald-500/20' : 'border-emerald-300/80 hover:border-emerald-500/80'
+              className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 bg-transparent transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 ${
+                isSelected
+                  ? 'border-emerald-500/80 bg-emerald-400/10 shadow-lg shadow-emerald-500/10'
+                  : 'border-transparent hover:border-emerald-500/70'
               }`}
               style={style}
             >
