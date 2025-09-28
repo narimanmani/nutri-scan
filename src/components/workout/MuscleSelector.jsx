@@ -118,6 +118,26 @@ function getMusclesForView(view) {
   return MUSCLE_GROUPS.filter((group) => group.view === view || group.view === 'both');
 }
 
+const WGER_ASSET_BASE_URL = 'https://wger.de';
+
+function toAbsoluteAssetUrl(url) {
+  if (!url) {
+    return '';
+  }
+
+  if (/^https?:\/\//i.test(url)) {
+    return url;
+  }
+
+  if (url.startsWith('//')) {
+    return `https:${url}`;
+  }
+
+  const normalizedBase = WGER_ASSET_BASE_URL.replace(/\/$/, '');
+  const normalizedPath = url.startsWith('/') ? url : `/${url}`;
+  return `${normalizedBase}${normalizedPath}`;
+}
+
 function buildMuscleVisuals(records = []) {
   const byId = new Map();
   records.forEach((record) => {
@@ -129,7 +149,7 @@ function buildMuscleVisuals(records = []) {
   const resolveBaseImage = (isFront) => {
     for (const record of records) {
       if (record?.image_url_secondary && Boolean(record.is_front) === isFront) {
-        return record.image_url_secondary;
+        return toAbsoluteAssetUrl(record.image_url_secondary);
       }
     }
     return '';
@@ -142,7 +162,7 @@ function buildMuscleVisuals(records = []) {
       const record = byId.get(id);
       if (!record) continue;
       if (Boolean(record.is_front) === isFront && record.image_url_main) {
-        return record.image_url_main;
+        return toAbsoluteAssetUrl(record.image_url_main);
       }
     }
 
@@ -150,7 +170,7 @@ function buildMuscleVisuals(records = []) {
       const record = byId.get(id);
       if (!record) continue;
       if (record.image_url_secondary) {
-        return record.image_url_secondary;
+        return toAbsoluteAssetUrl(record.image_url_secondary);
       }
     }
 
@@ -158,7 +178,7 @@ function buildMuscleVisuals(records = []) {
       const record = byId.get(id);
       if (!record) continue;
       if (record.image_url_main) {
-        return record.image_url_main;
+        return toAbsoluteAssetUrl(record.image_url_main);
       }
     }
 
