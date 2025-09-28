@@ -1,8 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import MuscleSelector, { MUSCLE_GROUPS } from '@/components/workout/MuscleSelector.jsx';
-import { generateWorkoutPlanFromMuscles } from '@/api/wger.js';
+import MuscleSelector from '@/components/workout/MuscleSelector.jsx';
+import { fetchAllMuscles, generateWorkoutPlanFromMuscles } from '@/api/wger.js';
 
 const BODY_VIEWS = ['front', 'back'];
+const WGER_ASSET_BASE_URL = 'https://wger.de';
+
+function toAbsoluteAssetUrl(url = '') {
+  if (!url) return '';
+
+  if (/^https?:\/\//i.test(url)) {
+    return url;
+  }
+
+  if (url.startsWith('//')) {
+    return `https:${url}`;
+  }
+
+  const normalizedBase = WGER_ASSET_BASE_URL.replace(/\/$/, '');
+  const normalizedPath = url.startsWith('/') ? url : `/${url}`;
+  return `${normalizedBase}${normalizedPath}`;
+}
+
+function formatDescription(name = '') {
+  const cleaned = name.replace(/muscle/gi, '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) {
+    return 'Add this muscle to balance your training focus.';
+  }
+  return `Focus on the ${cleaned.toLowerCase()} to build balanced strength and control.`;
+}
 
 function sanitizeHtml(html) {
   if (!html) return '';
@@ -15,15 +40,66 @@ function sanitizeHtml(html) {
 
 export default function WorkoutPlanner() {
   const [view, setView] = useState('front');
-  const [selectedKeys, setSelectedKeys] = useState([]);
+  const [catalog, setCatalog] = useState({ status: 'idle', muscles: [], error: '' });
+  const [selectedIds, setSelectedIds] = useState([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [plan, setPlan] = useState([]);
   const [error, setError] = useState('');
   const abortRef = useRef();
 
+  useEffect(() => {
+    let isActive = true;
+    const controller = new AbortController();
+
+    setCatalog({ status: 'loading', muscles: [], error: '' });
+
+    fetchAllMuscles({ signal: controller.signal })
+      .then((records) => {
+        if (!isActive) return;
+
+        const normalized = records
+          .map((record) => {
+            const id = record?.id;
+            if (!id) return null;
+
+            const label = record?.name_en || record?.name || `Muscle ${id}`;
+            const highlightUrl = toAbsoluteAssetUrl(record?.image_url_main || record?.image_url_secondary || '');
+            const secondaryUrl = toAbsoluteAssetUrl(record?.image_url_secondary || '');
+            const view = record?.is_front ? 'front' : 'back';
+
+            return {
+              id,
+              key: `muscle-${id}`,
+              label,
+              view,
+              highlightUrl,
+              secondaryUrl,
+              apiIds: [id],
+              description: formatDescription(label),
+            };
+          })
+          .filter(Boolean)
+          .sort((a, b) => a.label.localeCompare(b.label));
+
+        setCatalog({ status: 'success', muscles: normalized, error: '' });
+        setSelectedIds((prev) => prev.filter((id) => normalized.some((muscle) => muscle.id === id)));
+      })
+      .catch((err) => {
+        if (!isActive || err.name === 'AbortError') {
+          return;
+        }
+        setCatalog({ status: 'error', muscles: [], error: err.message || 'Unable to load anatomy data.' });
+      });
+
+    return () => {
+      isActive = false;
+      controller.abort();
+    };
+  }, []);
+
   const selectedMuscles = useMemo(
-    () => MUSCLE_GROUPS.filter((group) => selectedKeys.includes(group.key)),
-    [selectedKeys]
+    () => catalog.muscles.filter((muscle) => selectedIds.includes(muscle.id)),
+    [catalog.muscles, selectedIds]
   );
 
   useEffect(() => {
@@ -33,8 +109,9 @@ export default function WorkoutPlanner() {
   }, []);
 
   const toggleMuscle = (muscle) => {
-    setSelectedKeys((prev) =>
-      prev.includes(muscle.key) ? prev.filter((key) => key !== muscle.key) : [...prev, muscle.key]
+    if (!muscle) return;
+    setSelectedIds((prev) =>
+      prev.includes(muscle.id) ? prev.filter((id) => id !== muscle.id) : [...prev, muscle.id]
     );
   };
 
@@ -106,7 +183,14 @@ export default function WorkoutPlanner() {
             </div>
           </div>
 
-          <MuscleSelector view={view} selectedKeys={selectedKeys} onToggle={toggleMuscle} />
+          <MuscleSelector
+            view={view}
+            status={catalog.status}
+            error={catalog.error}
+            muscles={catalog.muscles}
+            selectedIds={selectedIds}
+            onToggle={toggleMuscle}
+          />
         </div>
 
         <div className="flex flex-col gap-6">
@@ -114,14 +198,13 @@ export default function WorkoutPlanner() {
             <h2 className="text-xl font-semibold text-emerald-900">Your Focus Areas</h2>
             {selectedMuscles.length === 0 ? (
               <p className="mt-3 text-sm text-emerald-800/80">
-                Tap on the anatomy illustration or use the list to highlight the muscles you would like to
-                train today. Selected groups will appear here with quick tips.
+                Tap on the anatomy illustration or use the list to highlight the muscles you would like to train today. Selected groups will appear here with quick tips.
               </p>
             ) : (
               <ul className="mt-4 space-y-3">
                 {selectedMuscles.map((muscle) => (
                   <li
-                    key={muscle.key}
+                    key={muscle.id}
                     className="flex items-start justify-between gap-4 rounded-2xl border border-emerald-200/60 bg-white/80 px-4 py-3 text-sm shadow-sm"
                   >
                     <div>
@@ -144,8 +227,7 @@ export default function WorkoutPlanner() {
           <div className="rounded-3xl border border-emerald-100 bg-white/80 p-6 shadow-lg shadow-emerald-100/70">
             <h2 className="text-xl font-semibold text-emerald-900">Generate workout</h2>
             <p className="mt-2 text-sm text-emerald-800/80">
-              We will use the wger public API to surface high-quality exercises for your selected muscles.
-              Choose at least one group and press the button to build your plan.
+              We will use the wger public API to surface high-quality exercises for your selected muscles. Choose at least one group and press the button to build your plan.
             </p>
             {error && <p className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{error}</p>}
             <button
@@ -164,8 +246,7 @@ export default function WorkoutPlanner() {
         <div>
           <h2 className="text-2xl font-semibold text-emerald-950">Workout plan</h2>
           <p className="text-sm text-emerald-900/70">
-            Each block contains exercises fetched in real time from the wger database. Mix and match the sets
-            and reps to match your equipment and training goals.
+            Each block contains exercises fetched in real time from the wger database. Mix and match the sets and reps to match your equipment and training goals.
           </p>
         </div>
 
@@ -184,7 +265,7 @@ export default function WorkoutPlanner() {
         <div className="grid gap-6 md:grid-cols-2">
           {plan.map((section) => (
             <article
-              key={section.muscle.key}
+              key={section.muscle.id}
               className="flex h-full flex-col gap-4 rounded-3xl border border-emerald-100 bg-white/90 p-6 shadow-lg shadow-emerald-100/80"
             >
               <header className="flex items-start justify-between gap-4">
