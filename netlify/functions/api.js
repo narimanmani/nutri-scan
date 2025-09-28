@@ -119,6 +119,107 @@ const NUTRIENT_FIELDS = [
   'vitamin_a'
 ];
 
+const SUGGESTIONS_SCHEMA = {
+  name: 'ingredient_suggestions',
+  schema: {
+    type: 'object',
+    properties: {
+      suggestions: {
+        type: 'array',
+        description: 'A list of ingredient suggestions that match the provided search text.',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Canonical ingredient name.' },
+            description: {
+              type: 'string',
+              description: 'Short helpful context about the ingredient or preparation style.'
+            },
+            typical_unit: {
+              type: 'string',
+              description: 'Common unit for logging the ingredient (g, ml, oz, cup, serving).'
+            },
+            example_portion: {
+              type: 'string',
+              description: 'Example portion sizing to guide the user (e.g. 85 g, 1 cup).'
+            }
+          },
+          required: ['name']
+        }
+      }
+    },
+    required: ['suggestions']
+  }
+};
+
+const INGREDIENT_ESTIMATE_SCHEMA = {
+  name: 'ingredient_estimate',
+  schema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'Name of the analysed ingredient.' },
+      amount: { type: 'number', description: 'Amount that was analysed.' },
+      unit: {
+        type: 'string',
+        description: 'Unit corresponding to the analysed amount (g, ml, oz, cup, serving).'
+      },
+      calories: { type: 'number', description: 'Estimated calories for the provided amount.' },
+      protein: { type: 'number', description: 'Estimated grams of protein.' },
+      carbs: { type: 'number', description: 'Estimated grams of carbohydrates.' },
+      fat: { type: 'number', description: 'Estimated grams of fat.' },
+      fiber: { type: 'number', description: 'Estimated grams of fiber.' },
+      sugar: { type: 'number', description: 'Estimated grams of sugar.' }
+    },
+    required: ['name', 'amount', 'unit', 'calories']
+  }
+};
+
+const FALLBACK_INGREDIENTS = [
+  {
+    name: 'Grilled chicken breast',
+    description: 'Boneless, skinless breast cooked without breading.',
+    typical_unit: 'g',
+    example_portion: '85 g',
+    perGram: { calories: 1.65, protein: 0.31, carbs: 0, fat: 0.04, fiber: 0, sugar: 0 }
+  },
+  {
+    name: 'Steamed broccoli florets',
+    description: 'Broccoli cooked with steam and no added butter or oil.',
+    typical_unit: 'g',
+    example_portion: '90 g',
+    perGram: { calories: 0.35, protein: 0.028, carbs: 0.07, fat: 0.003, fiber: 0.028, sugar: 0.015 }
+  },
+  {
+    name: 'Cooked brown rice',
+    description: 'Whole-grain brown rice cooked in water.',
+    typical_unit: 'cup',
+    example_portion: '1 cup',
+    perGram: { calories: 1.11, protein: 0.024, carbs: 0.23, fat: 0.009, fiber: 0.018, sugar: 0.002 }
+  },
+  {
+    name: 'Avocado',
+    description: 'Fresh Hass avocado, raw.',
+    typical_unit: 'g',
+    example_portion: '50 g',
+    perGram: { calories: 1.6, protein: 0.02, carbs: 0.084, fat: 0.15, fiber: 0.067, sugar: 0.03 }
+  },
+  {
+    name: 'Greek yogurt (plain, nonfat)',
+    description: 'Unsweetened nonfat strained yogurt.',
+    typical_unit: 'g',
+    example_portion: '170 g (6 oz)',
+    perGram: { calories: 0.59, protein: 0.1, carbs: 0.038, fat: 0.002, fiber: 0, sugar: 0.029 }
+  }
+];
+
+const FALLBACK_UNIT_TO_GRAMS = {
+  g: 1,
+  ml: 1,
+  oz: 28.35,
+  cup: 150,
+  serving: 100
+};
+
 const MOCK_RESPONSE = {
   meal_name: 'Grilled Chicken Salad',
   analysis_notes:
@@ -234,6 +335,185 @@ function ensureNumbers(payload) {
   const totals = sumNutrients(normalizedIngredients);
   NUTRIENT_FIELDS.forEach((field) => {
     result[field] = totals[field];
+  });
+
+  return result;
+}
+
+function fallbackSuggestions(query) {
+  if (!query || typeof query !== 'string') {
+    return FALLBACK_INGREDIENTS.slice(0, 5);
+  }
+
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return FALLBACK_INGREDIENTS.slice(0, 5);
+  }
+
+  const matches = FALLBACK_INGREDIENTS.filter((item) =>
+    item.name.toLowerCase().includes(normalized)
+  );
+
+  return (matches.length > 0 ? matches : FALLBACK_INGREDIENTS).slice(0, 5);
+}
+
+function fallbackEstimate({ ingredientName, amount, unit }) {
+  const normalizedName = typeof ingredientName === 'string' ? ingredientName.trim().toLowerCase() : '';
+  const match = FALLBACK_INGREDIENTS.find((item) =>
+    item.name.toLowerCase() === normalizedName || item.name.toLowerCase().includes(normalizedName)
+  );
+
+  const safeAmount = Number(amount) || 0;
+  const safeUnit = canonicalizeUnit(unit);
+
+  if (!match || safeAmount <= 0) {
+    return {
+      name: ingredientName || 'Ingredient',
+      amount: safeAmount,
+      unit: safeUnit,
+      calories: 0,
+      protein: 0,
+      carbs: 0,
+      fat: 0,
+      fiber: 0,
+      sugar: 0
+    };
+  }
+
+  const gramsEquivalent = safeAmount * (FALLBACK_UNIT_TO_GRAMS[safeUnit] || 1);
+  const estimate = { name: match.name, amount: safeAmount, unit: safeUnit };
+
+  Object.entries(match.perGram).forEach(([key, perGram]) => {
+    estimate[key] = Number((perGram * gramsEquivalent).toFixed(2));
+  });
+
+  return estimate;
+}
+
+async function suggestIngredientsWithOpenAI({ query }) {
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    console.warn('OPENAI_API_KEY is not configured. Using fallback ingredient suggestions.');
+    return { suggestions: fallbackSuggestions(query) };
+  }
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a nutrition assistant that helps users choose ingredient names for logging meals. Offer concise, relevant suggestions.'
+        },
+        {
+          role: 'user',
+          content: `Provide ingredient suggestions for this search text: "${query || ''}"`
+        }
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: SUGGESTIONS_SCHEMA
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || 'OpenAI ingredient suggestion request failed.');
+  }
+
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
+
+  if (!content) {
+    throw new Error('OpenAI ingredient suggestion response did not include content.');
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch (error) {
+    console.error('Failed to parse OpenAI ingredient suggestions. Falling back to defaults.', error);
+    return { suggestions: fallbackSuggestions(query) };
+  }
+
+  const suggestions = Array.isArray(parsed?.suggestions) ? parsed.suggestions : [];
+  return { suggestions: suggestions.slice(0, 7) };
+}
+
+async function estimateIngredientWithOpenAI({ ingredientName, amount, unit }) {
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    console.warn('OPENAI_API_KEY is not configured. Using fallback ingredient estimate.');
+    return fallbackEstimate({ ingredientName, amount, unit });
+  }
+
+  const normalizedUnit = canonicalizeUnit(unit);
+  const safeAmount = Number(amount) || 0;
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a nutrition assistant that estimates macronutrients for precise ingredient portions. Base estimates on reliable food composition data.'
+        },
+        {
+          role: 'user',
+          content: `Estimate nutrition for ${safeAmount} ${normalizedUnit} of ${ingredientName}.`
+        }
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: INGREDIENT_ESTIMATE_SCHEMA
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || 'OpenAI ingredient estimate request failed.');
+  }
+
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
+
+  if (!content) {
+    throw new Error('OpenAI ingredient estimate response did not include content.');
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch (error) {
+    console.error('Failed to parse OpenAI ingredient estimate response. Using fallback estimate.', error);
+    return fallbackEstimate({ ingredientName, amount: safeAmount, unit: normalizedUnit });
+  }
+
+  const result = {
+    name: parsed?.name || ingredientName,
+    amount: Number(parsed?.amount) || safeAmount,
+    unit: canonicalizeUnit(parsed?.unit || normalizedUnit)
+  };
+
+  ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar'].forEach((field) => {
+    const numeric = Number(parsed?.[field]);
+    result[field] = Number.isFinite(numeric) ? numeric : 0;
   });
 
   return result;
@@ -411,6 +691,45 @@ exports.handler = async function handler(event) {
     } catch (error) {
       console.error('Failed to analyze meal image via Netlify function:', error);
       return jsonResponse(500, { error: error.message || 'Failed to analyze the meal image.' });
+    }
+  }
+
+  if (subPath === '/ingredient-suggestions' && event.httpMethod === 'POST') {
+    try {
+      const payload = JSON.parse(event.body || '{}');
+      const { type = 'suggestions' } = payload;
+
+      if (type === 'estimate') {
+        const { ingredientName, amount, unit } = payload;
+
+        if (!ingredientName || typeof ingredientName !== 'string') {
+          return jsonResponse(400, { error: 'ingredientName is required.' });
+        }
+
+        if (!unit) {
+          return jsonResponse(400, { error: 'unit is required.' });
+        }
+
+        const numericAmount = Number(amount);
+        if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+          return jsonResponse(400, { error: 'amount must be a positive number.' });
+        }
+
+        const estimate = await estimateIngredientWithOpenAI({
+          ingredientName,
+          amount: numericAmount,
+          unit
+        });
+
+        return jsonResponse(200, { data: estimate });
+      }
+
+      const { query = '' } = payload;
+      const suggestions = await suggestIngredientsWithOpenAI({ query });
+      return jsonResponse(200, { data: suggestions });
+    } catch (error) {
+      console.error('Failed to provide ingredient suggestions via Netlify function:', error);
+      return jsonResponse(500, { error: error.message || 'Failed to fetch ingredient suggestions.' });
     }
   }
 
