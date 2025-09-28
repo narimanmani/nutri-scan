@@ -1,0 +1,212 @@
+[
+  {
+    "id": "balanced_foundation",
+    "name": "Balanced Foundation Plan",
+    "goal": "Steady weight maintenance and sustained daily energy.",
+    "description": "A nutrient-dense plan that keeps calories moderate while balancing complex carbohydrates, lean proteins, and healthy fats for reliable energy and appetite control.",
+    "macroTargets": {
+      "calories": 2100,
+      "protein": 115,
+      "carbs": 240,
+      "fat": 70,
+      "fiber": 30
+    },
+    "hydrationTarget": 9,
+    "focus": [
+      "Colorful produce at every meal",
+      "Lean protein at breakfast and lunch",
+      "Whole grains over refined options"
+    ],
+    "mealGuidance": [
+      {
+        "name": "Breakfast",
+        "description": "Greek yogurt parfait with berries, chia seeds, and a sprinkle of oats."
+      },
+      {
+        "name": "Lunch",
+        "description": "Grilled chicken grain bowl with quinoa, roasted vegetables, and olive oil vinaigrette."
+      },
+      {
+        "name": "Snack",
+        "description": "Apple slices with almond butter or a small smoothie with greens."
+      },
+      {
+        "name": "Dinner",
+        "description": "Salmon, roasted sweet potato, and steamed broccoli with lemon."
+      }
+    ],
+    "tips": [
+      "Batch cook grains and proteins on Sundays to simplify lunches.",
+      "Aim for at least one leafy green and one brightly colored vegetable daily.",
+      "Keep mixed nuts or roasted chickpeas on hand for a quick snack."
+    ]
+  },
+  {
+    "id": "lean_strength",
+    "name": "Lean Strength Plan",
+    "goal": "Support lean muscle building with controlled calories.",
+    "description": "Higher protein distribution throughout the day preserves muscle mass while keeping carbohydrates targeted around training sessions.",
+    "macroTargets": {
+      "calories": 2400,
+      "protein": 150,
+      "carbs": 220,
+      "fat": 75,
+      "fiber": 32
+    },
+    "hydrationTarget": 10,
+    "focus": [
+      "Protein at every meal and snack",
+      "Strength-focused pre/post workout fueling",
+      "Plenty of cruciferous vegetables"
+    ],
+    "mealGuidance": [
+      {
+        "name": "Breakfast",
+        "description": "Egg scramble with spinach, peppers, and turkey sausage plus whole-grain toast."
+      },
+      {
+        "name": "Lunch",
+        "description": "Turkey and hummus wrap with mixed greens and a side of lentil soup."
+      },
+      {
+        "name": "Snack",
+        "description": "Cottage cheese with pineapple or a protein shake with banana."
+      },
+      {
+        "name": "Dinner",
+        "description": "Sirloin steak, roasted Brussels sprouts, and garlic mashed cauliflower."
+      }
+    ],
+    "tips": [
+      "Prep a high-protein snack after workouts to support recovery.",
+      "Double vegetable portions at dinner for extra fiber and fullness.",
+      "Season meals generously with herbs to reduce the need for added salt."
+    ]
+  },
+  {
+    "id": "plant_power",
+    "name": "Plant-Powered Vitality",
+    "goal": "Maximize micronutrients with a plant-forward focus.",
+    "description": "A mostly plant-based approach emphasizing legumes, seeds, and colorful produce while maintaining adequate protein for recovery.",
+    "macroTargets": {
+      "calories": 2000,
+      "protein": 105,
+      "carbs": 250,
+      "fat": 65,
+      "fiber": 38
+    },
+    "hydrationTarget": 9,
+    "focus": [
+      "Two cups of leafy greens daily",
+      "Fermented foods several times per week",
+      "Omega-3 rich seeds and nuts"
+    ],
+    "mealGuidance": [
+      {
+        "name": "Breakfast",
+        "description": "Overnight oats with soy milk, chia seeds, pumpkin seeds, and berries."
+      },
+      {
+        "name": "Lunch",
+        "description": "Lentil and farro salad with roasted vegetables, arugula, and tahini dressing."
+      },
+      {
+        "name": "Snack",
+        "description": "Carrots and cucumber with edamame hummus or roasted chickpeas."
+      },
+      {
+        "name": "Dinner",
+        "description": "Tofu stir-fry with broccoli, snap peas, shiitake mushrooms, and brown rice."
+      }
+    ],
+    "tips": [
+      "Rotate plant proteins to cover the full amino acid spectrum.",
+      "Blend frozen cauliflower or zucchini into smoothies for extra vegetables.",
+      "Add flax or chia to oatmeal for an omega-3 boost."
+    ]
+  },
+  {
+    "id": "metabolic_reset",
+    "name": "Metabolic Reset Low-Carb",
+    "goal": "Improve insulin sensitivity with lower carbohydrate load.",
+    "description": "Focused on non-starchy vegetables, quality fats, and steady protein portions to stabilize blood sugar while maintaining satiety.",
+    "macroTargets": {
+      "calories": 1950,
+      "protein": 130,
+      "carbs": 140,
+      "fat": 85,
+      "fiber": 28
+    },
+    "hydrationTarget": 9,
+    "focus": [
+      "Non-starchy vegetables at lunch and dinner",
+      "Healthy fats like avocado, olives, and nuts",
+      "Evenly spaced meals to prevent grazing"
+    ],
+    "mealGuidance": [
+      {
+        "name": "Breakfast",
+        "description": "Veggie omelet with feta and avocado slices."
+      },
+      {
+        "name": "Lunch",
+        "description": "Baked chicken thighs over mixed greens with olives and cucumber."
+      },
+      {
+        "name": "Snack",
+        "description": "Celery with hummus or a handful of walnuts."
+      },
+      {
+        "name": "Dinner",
+        "description": "Zucchini noodles with turkey meatballs and roasted peppers."
+      }
+    ],
+    "tips": [
+      "Start meals with a fiber-rich salad to support fullness.",
+      "Limit sweetened beverages; infuse water with citrus or herbs instead.",
+      "Prioritize sleep hygiene to reinforce metabolic recovery."
+    ]
+  },
+  {
+    "id": "mediterranean_refresh",
+    "name": "Mediterranean Refresh",
+    "goal": "Heart-healthy nourishment with anti-inflammatory focus.",
+    "description": "Inspired by coastal Mediterranean eating with olive oil, seafood, legumes, and abundant produce for metabolic health and longevity.",
+    "macroTargets": {
+      "calories": 2200,
+      "protein": 120,
+      "carbs": 235,
+      "fat": 80,
+      "fiber": 34
+    },
+    "hydrationTarget": 9,
+    "focus": [
+      "Extra-virgin olive oil as the primary cooking fat",
+      "Fish or legumes at least five times per week",
+      "Fresh herbs, citrus, and vinegar for flavor"
+    ],
+    "mealGuidance": [
+      {
+        "name": "Breakfast",
+        "description": "Whole-grain toast with ricotta, tomato, basil, and olive oil drizzle."
+      },
+      {
+        "name": "Lunch",
+        "description": "Farro and chickpea salad with cucumber, tomato, olives, and feta."
+      },
+      {
+        "name": "Snack",
+        "description": "Greek yogurt with walnuts and honey or fresh fruit."
+      },
+      {
+        "name": "Dinner",
+        "description": "Grilled cod with lemon, roasted eggplant, and herbed couscous."
+      }
+    ],
+    "tips": [
+      "Keep a jar of marinated beans for quick protein add-ins.",
+      "Use herbs and citrus to brighten meals without extra salt.",
+      "Make a large salad base twice per week to assemble fast lunches."
+    ]
+  }
+]

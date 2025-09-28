@@ -2,7 +2,7 @@
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { Camera, BarChart3, History, Leaf } from "lucide-react";
+import { Camera, BarChart3, History, Leaf, ClipboardList } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -32,6 +32,11 @@ const navigationItems = [
     title: "Meal History",
     url: createPageUrl("History"),
     icon: History,
+  },
+  {
+    title: "Diet Plans",
+    url: createPageUrl("Diet Plans"),
+    icon: ClipboardList,
   },
 ];
 
