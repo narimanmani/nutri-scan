@@ -1,9 +1,13 @@
 import mealsSeed from '@/data/meals.json';
+import dietPlansSeed from '@/data/dietPlans.json';
 
 const NETLIFY_UPLOAD_ENDPOINT = '/api/upload-photo';
 
 const STORAGE_KEY = 'nutri-scan:meals';
+const DIET_PLAN_STORAGE_KEY = 'nutri-scan:diet-plans';
+
 let cachedMeals = null;
+let cachedDietPlans = null;
 
 const CANONICAL_UNITS = ['g', 'ml', 'oz', 'cup', 'serving'];
 
@@ -232,6 +236,176 @@ function writeToLocalStorage(meals) {
   }
 }
 
+function readPlansFromLocalStorage() {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const stored = window.localStorage.getItem(DIET_PLAN_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : null;
+  } catch (error) {
+    console.warn('Unable to read diet plans from localStorage:', error);
+    return null;
+  }
+}
+
+function writePlansToLocalStorage(plans) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(DIET_PLAN_STORAGE_KEY, JSON.stringify(plans));
+  } catch (error) {
+    console.warn('Unable to persist diet plans to localStorage:', error);
+  }
+}
+
+function normalizeMacroTargets(targets = {}) {
+  if (!targets || typeof targets !== 'object') {
+    return {};
+  }
+
+  return Object.entries(targets).reduce((acc, [key, value]) => {
+    const normalizedKey = typeof key === 'string' && key.length > 0 ? key.toLowerCase() : key;
+    const numericValue = Number(value);
+    acc[normalizedKey] = Number.isFinite(numericValue) ? Math.round(numericValue) : 0;
+    return acc;
+  }, {});
+}
+
+function normalizeMealGuidance(entries = []) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+
+  return entries
+    .map((entry, index) => {
+      const safe = typeof entry === 'object' && entry !== null ? entry : {};
+      const name = typeof safe.name === 'string' && safe.name.length > 0
+        ? safe.name
+        : `Meal ${index + 1}`;
+      const description = typeof safe.description === 'string' ? safe.description : '';
+
+      if (!name && !description) {
+        return null;
+      }
+
+      return { name, description };
+    })
+    .filter(Boolean);
+}
+
+function withPlanDefaults(plan, index = 0) {
+  const safe = typeof plan === 'object' && plan !== null ? { ...plan } : {};
+  const createdAt = typeof safe.created_at === 'string' && safe.created_at.length > 0
+    ? safe.created_at
+    : typeof safe.createdAt === 'string' && safe.createdAt.length > 0
+      ? safe.createdAt
+      : new Date().toISOString();
+
+  const updatedAt = typeof safe.updated_at === 'string' && safe.updated_at.length > 0
+    ? safe.updated_at
+    : new Date().toISOString();
+
+  const macroTargets = normalizeMacroTargets(safe.macroTargets || safe.targets);
+  const hasTargets = Object.keys(macroTargets).length > 0;
+
+  const normalized = {
+    id:
+      typeof safe.id === 'string' && safe.id.length > 0
+        ? safe.id
+        : `diet_plan_${generateId()}`,
+    name:
+      typeof safe.name === 'string' && safe.name.length > 0
+        ? safe.name
+        : `Diet Plan ${index + 1}`,
+    goal: typeof safe.goal === 'string' ? safe.goal : '',
+    description: typeof safe.description === 'string' ? safe.description : '',
+    macroTargets: hasTargets
+      ? macroTargets
+      : {
+          calories: 2000,
+          protein: 100,
+          carbs: 220,
+          fat: 70,
+        },
+    hydrationTarget: Number.isFinite(Number(safe.hydrationTarget))
+      ? Number(safe.hydrationTarget)
+      : 8,
+    focus: Array.isArray(safe.focus) ? safe.focus.map((item) => String(item)) : [],
+    mealGuidance: normalizeMealGuidance(safe.mealGuidance),
+    tips: Array.isArray(safe.tips) ? safe.tips.map((item) => String(item)) : [],
+    created_at: createdAt,
+    updated_at: updatedAt,
+    isActive: Boolean(safe.isActive),
+    source:
+      typeof safe.source === 'string' && safe.source.length > 0
+        ? safe.source
+        : 'template',
+  };
+
+  return normalized;
+}
+
+function clonePlan(plan) {
+  if (!plan || typeof plan !== 'object') {
+    return null;
+  }
+
+  return {
+    ...plan,
+    macroTargets: { ...(plan.macroTargets || {}) },
+    focus: Array.isArray(plan.focus) ? [...plan.focus] : [],
+    mealGuidance: Array.isArray(plan.mealGuidance)
+      ? plan.mealGuidance.map((entry) => ({ ...entry }))
+      : [],
+    tips: Array.isArray(plan.tips) ? [...plan.tips] : [],
+  };
+}
+
+function hydrateDietPlanSeed() {
+  const hydrated = dietPlansSeed.map((plan, index) =>
+    withPlanDefaults(
+      {
+        ...plan,
+        isActive: index === 0,
+        source: 'template',
+      },
+      index,
+    ),
+  );
+
+  if (!hydrated.some((plan) => plan.isActive) && hydrated.length > 0) {
+    hydrated[0] = { ...hydrated[0], isActive: true };
+  }
+
+  return hydrated;
+}
+
+async function getDietPlans() {
+  if (cachedDietPlans) {
+    return cachedDietPlans;
+  }
+
+  const stored = readPlansFromLocalStorage();
+  if (stored && Array.isArray(stored)) {
+    const normalized = stored.map((plan, index) => withPlanDefaults(plan, index));
+
+    if (!normalized.some((plan) => plan.isActive) && normalized.length > 0) {
+      normalized[0] = { ...normalized[0], isActive: true };
+    }
+
+    cachedDietPlans = normalized;
+    return cachedDietPlans;
+  }
+
+  cachedDietPlans = hydrateDietPlanSeed();
+  writePlansToLocalStorage(cachedDietPlans);
+  return cachedDietPlans;
+}
+
 function hydrateSeedData() {
   return mealsSeed.map((meal) => {
     const createdDate = meal.created_date
@@ -338,4 +512,139 @@ export async function clearMeals() {
   cachedMeals = hydrateSeedData();
   writeToLocalStorage(cachedMeals);
   return cachedMeals;
+}
+
+export async function listDietPlans() {
+  const plans = await getDietPlans();
+
+  const sorted = [...plans].sort((a, b) => {
+    if (a.isActive && !b.isActive) return -1;
+    if (!a.isActive && b.isActive) return 1;
+
+    const aTime = new Date(a.created_at || a.createdAt || 0).getTime();
+    const bTime = new Date(b.created_at || b.createdAt || 0).getTime();
+    return bTime - aTime;
+  });
+
+  return sorted.map(clonePlan);
+}
+
+export async function getDietPlanById(id) {
+  if (!id) {
+    return null;
+  }
+
+  const plans = await getDietPlans();
+  const found = plans.find((plan) => plan.id === id);
+  return found ? clonePlan(found) : null;
+}
+
+export async function getActiveDietPlan() {
+  const plans = await getDietPlans();
+  const active = plans.find((plan) => plan.isActive);
+  return active ? clonePlan(active) : null;
+}
+
+export async function createDietPlan(plan) {
+  const plans = await getDietPlans();
+  const now = new Date().toISOString();
+  const basePlan = {
+    ...plan,
+    id: `diet_plan_${generateId()}`,
+    created_at: now,
+    updated_at: now,
+    source: plan?.source || 'custom',
+  };
+
+  const normalized = withPlanDefaults(basePlan, plans.length);
+
+  const nextPlans = normalized.isActive
+    ? plans.map((existing) =>
+        existing.isActive
+          ? { ...existing, isActive: false, updated_at: now }
+          : { ...existing },
+      )
+    : plans.map((existing) => ({ ...existing }));
+
+  const updated = [normalized, ...nextPlans];
+  cachedDietPlans = updated;
+  writePlansToLocalStorage(updated);
+  return clonePlan(normalized);
+}
+
+export async function updateDietPlan(id, updates = {}) {
+  if (!id) {
+    throw new Error('An id is required to update a diet plan.');
+  }
+
+  const plans = await getDietPlans();
+  const index = plans.findIndex((plan) => plan.id === id);
+
+  if (index === -1) {
+    throw new Error('Diet plan not found.');
+  }
+
+  const now = new Date().toISOString();
+  const existing = plans[index];
+
+  const normalized = withPlanDefaults(
+    {
+      ...existing,
+      ...updates,
+      id: existing.id,
+      created_at: existing.created_at,
+      updated_at: now,
+      source: updates.source || existing.source,
+      isActive: typeof updates.isActive === 'boolean' ? updates.isActive : existing.isActive,
+    },
+    index,
+  );
+
+  const nextPlans = plans.map((plan) => {
+    if (plan.id === id) {
+      return normalized;
+    }
+
+    if (normalized.isActive && plan.isActive) {
+      return { ...plan, isActive: false, updated_at: now };
+    }
+
+    return { ...plan };
+  });
+
+  cachedDietPlans = nextPlans;
+  writePlansToLocalStorage(nextPlans);
+  return clonePlan(normalized);
+}
+
+export async function setActiveDietPlan(id) {
+  if (!id) {
+    throw new Error('An id is required to set the active diet plan.');
+  }
+
+  const plans = await getDietPlans();
+  const now = new Date().toISOString();
+  let found = false;
+
+  const nextPlans = plans.map((plan) => {
+    if (plan.id === id) {
+      found = true;
+      return { ...plan, isActive: true, updated_at: now };
+    }
+
+    if (plan.isActive) {
+      return { ...plan, isActive: false, updated_at: now };
+    }
+
+    return { ...plan };
+  });
+
+  if (!found) {
+    throw new Error('Diet plan not found.');
+  }
+
+  cachedDietPlans = nextPlans;
+  writePlansToLocalStorage(nextPlans);
+  const active = nextPlans.find((plan) => plan.id === id);
+  return active ? clonePlan(active) : null;
 }

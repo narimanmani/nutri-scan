@@ -6,6 +6,7 @@ import Upload from "./Upload";
 
 import History from "./History";
 import EditMeal from "./EditMeal";
+import DietPlans from "./DietPlans";
 
 import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
 
@@ -16,6 +17,8 @@ const PAGES = {
     Upload: Upload,
 
     History: History,
+
+    "Diet Plans": DietPlans,
 
 }
 
@@ -53,6 +56,8 @@ function PagesContent() {
                 <Route path="/History" element={<History />} />
 
                 <Route path="/History/:mealId" element={<EditMeal />} />
+
+                <Route path="/Diet-Plans" element={<DietPlans />} />
             </Routes>
         </Layout>
     );

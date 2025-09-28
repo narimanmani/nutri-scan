@@ -1,8 +1,9 @@
 
-import React from "react";
+import { useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { Camera, BarChart3, History, Leaf } from "lucide-react";
+import { Camera, BarChart3, History, Leaf, ClipboardList } from "lucide-react";
+import { APP_DESCRIPTION, APP_NAME, APP_TAGLINE } from "@/constants/app";
 import {
   Sidebar,
   SidebarContent,
@@ -33,10 +34,25 @@ const navigationItems = [
     url: createPageUrl("History"),
     icon: History,
   },
+  {
+    title: "Diet Plans",
+    url: createPageUrl("Diet Plans"),
+    icon: ClipboardList,
+  },
 ];
 
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
+
+  useEffect(() => {
+    const pageTitle = currentPageName ? `${APP_NAME} | ${currentPageName}` : APP_NAME;
+    document.title = pageTitle;
+
+    const descriptionMeta = document.querySelector('meta[name="description"]');
+    if (descriptionMeta) {
+      descriptionMeta.setAttribute("content", APP_DESCRIPTION);
+    }
+  }, [currentPageName]);
 
   return (
     <SidebarProvider>
@@ -58,8 +74,8 @@ export default function Layout({ children, currentPageName }) {
                 <Leaf className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h2 className="font-bold text-gray-900 text-lg">NutriTracker</h2>
-                <p className="text-xs text-gray-500 font-medium">AI Meal Analysis</p>
+                <h2 className="font-bold text-gray-900 text-lg">{APP_NAME}</h2>
+                <p className="text-xs text-gray-500 font-medium">{APP_TAGLINE}</p>
               </div>
             </div>
           </SidebarHeader>
@@ -93,9 +109,7 @@ export default function Layout({ children, currentPageName }) {
           <SidebarFooter className="border-t border-gray-100 p-6">
             <div className="bg-gradient-to-r from-emerald-50 to-teal-50 p-4 rounded-xl border border-emerald-100">
               <h3 className="font-semibold text-emerald-800 text-sm mb-1">Stay Healthy!</h3>
-              <p className="text-emerald-600 text-xs leading-relaxed">
-                Track your nutrition and reach your wellness goals with AI-powered insights.
-              </p>
+              <p className="text-emerald-600 text-xs leading-relaxed">{APP_DESCRIPTION}</p>
             </div>
           </SidebarFooter>
         </Sidebar>
@@ -104,7 +118,7 @@ export default function Layout({ children, currentPageName }) {
           <header className="bg-white border-b border-gray-100 px-6 py-4 md:hidden">
             <div className="flex items-center gap-4">
               <SidebarTrigger className="hover:bg-gray-100 p-2 rounded-lg transition-colors duration-200" />
-              <h1 className="text-xl font-semibold text-gray-900">NutriTracker</h1>
+              <h1 className="text-xl font-semibold text-gray-900">{APP_NAME}</h1>
             </div>
           </header>
 
