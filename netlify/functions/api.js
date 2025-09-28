@@ -663,8 +663,22 @@ function jsonResponse(statusCode, body) {
   };
 }
 
+function resolveSubPath(event) {
+  const rawPath = typeof event?.path === 'string' ? event.path : '';
+
+  if (!rawPath) {
+    return '/';
+  }
+
+  const withoutFunctionPrefix = rawPath.replace(/^\/\.netlify\/functions\/api/, '');
+  const withoutApiPrefix = withoutFunctionPrefix.replace(/^\/api/, '');
+  const normalized = withoutApiPrefix.length > 0 ? withoutApiPrefix : '/';
+
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+}
+
 exports.handler = async function handler(event) {
-  const subPath = event.path.replace(/^\/\.netlify\/functions\/api/, '') || '/';
+  const subPath = resolveSubPath(event);
 
   if (event.httpMethod === 'OPTIONS') {
     return {
