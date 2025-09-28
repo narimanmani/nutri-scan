@@ -1,5 +1,10 @@
 const { getStore } = require('@netlify/blobs');
 
+const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 8000);
+
+const suggestionCache = new Map();
+const estimateCache = new Map();
+
 const ANALYSIS_SCHEMA = {
   name: 'meal_analysis',
   schema: {
@@ -390,50 +395,114 @@ function fallbackEstimate({ ingredientName, amount, unit }) {
   return estimate;
 }
 
+function cacheSuggestions(query, payload) {
+  const normalized = typeof query === 'string' ? query.trim().toLowerCase() : '';
+  if (!normalized) {
+    return payload;
+  }
+
+  suggestionCache.set(normalized, payload);
+  return payload;
+}
+
+function getCachedSuggestions(query) {
+  const normalized = typeof query === 'string' ? query.trim().toLowerCase() : '';
+  return normalized ? suggestionCache.get(normalized) : undefined;
+}
+
+function cacheEstimate(signature, payload) {
+  if (!signature) {
+    return payload;
+  }
+
+  estimateCache.set(signature, payload);
+  return payload;
+}
+
+function getCachedEstimate(signature) {
+  return signature ? estimateCache.get(signature) : undefined;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = OPENAI_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error(`Request to ${url} timed out after ${timeoutMs}ms`);
+      timeoutError.code = 'TIMEOUT';
+      throw timeoutError;
+    }
+    throw error;
+  }
+}
+
 async function suggestIngredientsWithOpenAI({ query }) {
   const apiKey = process.env.OPENAI_API_KEY;
+  const cached = getCachedSuggestions(query);
+
+  if (cached) {
+    return cached;
+  }
 
   if (!apiKey) {
     console.warn('OPENAI_API_KEY is not configured. Using fallback ingredient suggestions.');
-    return { suggestions: fallbackSuggestions(query) };
+    return cacheSuggestions(query, { suggestions: fallbackSuggestions(query) });
   }
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are a nutrition assistant that helps users choose ingredient names for logging meals. Offer concise, relevant suggestions.'
+  let response;
+  try {
+    response = await fetchWithTimeout(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
         },
-        {
-          role: 'user',
-          content: `Provide ingredient suggestions for this search text: "${query || ''}"`
-        }
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: SUGGESTIONS_SCHEMA
-      }
-    })
-  });
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are a nutrition assistant that helps users choose ingredient names for logging meals. Offer concise, relevant suggestions.'
+            },
+            {
+              role: 'user',
+              content: `Provide ingredient suggestions for this search text: "${query || ''}"`
+            }
+          ],
+          response_format: {
+            type: 'json_schema',
+            json_schema: SUGGESTIONS_SCHEMA
+          }
+        })
+      },
+      OPENAI_REQUEST_TIMEOUT_MS
+    );
+  } catch (error) {
+    console.warn('OpenAI ingredient suggestion request timed out or failed. Using fallback data.', error);
+    return cacheSuggestions(query, { suggestions: fallbackSuggestions(query) });
+  }
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || 'OpenAI ingredient suggestion request failed.');
+    console.warn('OpenAI ingredient suggestion request returned an error. Using fallback data.', error);
+    return cacheSuggestions(query, { suggestions: fallbackSuggestions(query) });
   }
 
   const data = await response.json();
   const content = data?.choices?.[0]?.message?.content;
 
   if (!content) {
-    throw new Error('OpenAI ingredient suggestion response did not include content.');
+    console.warn('OpenAI ingredient suggestion response did not include content. Using fallback data.');
+    return cacheSuggestions(query, { suggestions: fallbackSuggestions(query) });
   }
 
   let parsed;
@@ -441,60 +510,91 @@ async function suggestIngredientsWithOpenAI({ query }) {
     parsed = JSON.parse(content);
   } catch (error) {
     console.error('Failed to parse OpenAI ingredient suggestions. Falling back to defaults.', error);
-    return { suggestions: fallbackSuggestions(query) };
+    return cacheSuggestions(query, { suggestions: fallbackSuggestions(query) });
   }
 
   const suggestions = Array.isArray(parsed?.suggestions) ? parsed.suggestions : [];
-  return { suggestions: suggestions.slice(0, 7) };
+  return cacheSuggestions(query, { suggestions: suggestions.slice(0, 7) });
 }
 
 async function estimateIngredientWithOpenAI({ ingredientName, amount, unit }) {
   const apiKey = process.env.OPENAI_API_KEY;
+  const normalizedUnit = canonicalizeUnit(unit);
+  const safeAmount = Number(amount) || 0;
+  const normalizedName = typeof ingredientName === 'string' ? ingredientName.trim() : '';
+  const cacheKey = normalizedName && safeAmount > 0 ? `${normalizedName}|${safeAmount}|${normalizedUnit}` : null;
+
+  const cached = getCachedEstimate(cacheKey);
+  if (cached) {
+    return cached;
+  }
 
   if (!apiKey) {
     console.warn('OPENAI_API_KEY is not configured. Using fallback ingredient estimate.');
-    return fallbackEstimate({ ingredientName, amount, unit });
+    return cacheEstimate(cacheKey, fallbackEstimate({ ingredientName, amount: safeAmount, unit: normalizedUnit }));
   }
 
-  const normalizedUnit = canonicalizeUnit(unit);
-  const safeAmount = Number(amount) || 0;
+  if (safeAmount <= 0) {
+    return cacheEstimate(cacheKey, fallbackEstimate({ ingredientName, amount: safeAmount, unit: normalizedUnit }));
+  }
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are a nutrition assistant that estimates macronutrients for precise ingredient portions. Base estimates on reliable food composition data.'
+  let response;
+  try {
+    response = await fetchWithTimeout(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
         },
-        {
-          role: 'user',
-          content: `Estimate nutrition for ${safeAmount} ${normalizedUnit} of ${ingredientName}.`
-        }
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: INGREDIENT_ESTIMATE_SCHEMA
-      }
-    })
-  });
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are a nutrition assistant that estimates macronutrients for precise ingredient portions. Base estimates on reliable food composition data.'
+            },
+            {
+              role: 'user',
+              content: `Estimate nutrition for ${safeAmount} ${normalizedUnit} of ${ingredientName}.`
+            }
+          ],
+          response_format: {
+            type: 'json_schema',
+            json_schema: INGREDIENT_ESTIMATE_SCHEMA
+          }
+        })
+      },
+      OPENAI_REQUEST_TIMEOUT_MS
+    );
+  } catch (error) {
+    console.warn('OpenAI ingredient estimate request timed out or failed. Using fallback data.', error);
+    return cacheEstimate(
+      cacheKey,
+      fallbackEstimate({ ingredientName, amount: safeAmount, unit: normalizedUnit })
+    );
+  }
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || 'OpenAI ingredient estimate request failed.');
+    console.warn('OpenAI ingredient estimate request returned an error. Using fallback data.', error);
+    return cacheEstimate(
+      cacheKey,
+      fallbackEstimate({ ingredientName, amount: safeAmount, unit: normalizedUnit })
+    );
   }
 
   const data = await response.json();
   const content = data?.choices?.[0]?.message?.content;
 
   if (!content) {
-    throw new Error('OpenAI ingredient estimate response did not include content.');
+    console.warn('OpenAI ingredient estimate response did not include content. Using fallback data.');
+    return cacheEstimate(
+      cacheKey,
+      fallbackEstimate({ ingredientName, amount: safeAmount, unit: normalizedUnit })
+    );
   }
 
   let parsed;
@@ -502,21 +602,29 @@ async function estimateIngredientWithOpenAI({ ingredientName, amount, unit }) {
     parsed = JSON.parse(content);
   } catch (error) {
     console.error('Failed to parse OpenAI ingredient estimate response. Using fallback estimate.', error);
-    return fallbackEstimate({ ingredientName, amount: safeAmount, unit: normalizedUnit });
+    return cacheEstimate(
+      cacheKey,
+      fallbackEstimate({ ingredientName, amount: safeAmount, unit: normalizedUnit })
+    );
   }
 
-  const result = {
+  return cacheEstimate(cacheKey, {
     name: parsed?.name || ingredientName,
-    amount: Number(parsed?.amount) || safeAmount,
-    unit: canonicalizeUnit(parsed?.unit || normalizedUnit)
-  };
-
-  ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar'].forEach((field) => {
-    const numeric = Number(parsed?.[field]);
-    result[field] = Number.isFinite(numeric) ? numeric : 0;
+    amount: safeAmount,
+    unit: normalizedUnit,
+    calories: Number(parsed?.calories) || 0,
+    protein: Number(parsed?.protein) || 0,
+    carbs: Number(parsed?.carbs) || 0,
+    fat: Number(parsed?.fat) || 0,
+    fiber: Number(parsed?.fiber) || 0,
+    sugar: Number(parsed?.sugar) || 0,
+    sodium: Number(parsed?.sodium) || 0,
+    potassium: Number(parsed?.potassium) || 0,
+    calcium: Number(parsed?.calcium) || 0,
+    iron: Number(parsed?.iron) || 0,
+    vitamin_c: Number(parsed?.vitamin_c) || 0,
+    vitamin_a: Number(parsed?.vitamin_a) || 0
   });
-
-  return result;
 }
 
 function parseImageDataUrl(dataUrl) {
