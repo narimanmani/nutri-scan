@@ -26,6 +26,57 @@ const NUTRIENT_FIELDS = [
 const PRIMARY_NUTRIENTS = ['calories', 'protein', 'carbs', 'fat'];
 const MICRO_NUTRIENTS = NUTRIENT_FIELDS.filter((field) => !PRIMARY_NUTRIENTS.includes(field));
 
+const CANONICAL_UNITS = ['g', 'ml', 'oz', 'cup', 'serving'];
+
+const UNIT_ALIASES = {
+  g: 'g',
+  gram: 'g',
+  grams: 'g',
+  "g (grams)": 'g',
+  kilogram: 'g',
+  kilograms: 'g',
+  kg: 'g',
+  ml: 'ml',
+  milliliter: 'ml',
+  milliliters: 'ml',
+  millilitre: 'ml',
+  millilitres: 'ml',
+  'ml (milliliters)': 'ml',
+  liter: 'ml',
+  liters: 'ml',
+  litre: 'ml',
+  litres: 'ml',
+  l: 'ml',
+  ounce: 'oz',
+  ounces: 'oz',
+  'fl oz': 'oz',
+  oz: 'oz',
+  cup: 'cup',
+  cups: 'cup',
+  serving: 'serving',
+  servings: 'serving',
+  portion: 'serving',
+  portions: 'serving'
+};
+
+function canonicalizeUnit(unit) {
+  if (typeof unit !== 'string') {
+    return 'g';
+  }
+
+  const normalized = unit.trim().toLowerCase();
+  if (normalized.length === 0) {
+    return 'g';
+  }
+
+  const mapped = UNIT_ALIASES[normalized];
+  if (mapped) {
+    return mapped;
+  }
+
+  return CANONICAL_UNITS.includes(normalized) ? normalized : 'g';
+}
+
 const UNIT_OPTIONS = [
   { value: 'g', label: 'g (grams)' },
   { value: 'ml', label: 'ml (milliliters)' },
@@ -65,7 +116,7 @@ function normalizeIngredient(ingredient, index = 0) {
       typeof safe.name === 'string' && safe.name.length > 0
         ? safe.name
         : `Ingredient ${index + 1}`,
-    unit: typeof safe.unit === 'string' && safe.unit.length > 0 ? safe.unit : 'g',
+    unit: canonicalizeUnit(safe.unit),
     amount: Number(safe.amount) || 0,
     ...createEmptyNutrients(),
   };
