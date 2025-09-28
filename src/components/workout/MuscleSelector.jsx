@@ -5,6 +5,12 @@ const BASE_SILHOUETTES = {
   back: 'https://wger.de/static/images/muscles/muscular_system_back.svg',
 };
 
+const OVERLAY_BASE_STYLE = {
+  backgroundRepeat: 'no-repeat',
+  backgroundSize: 'contain',
+  backgroundPosition: 'center',
+};
+
 function buildMaskStyle(src = '') {
   if (!src) return {};
   return {
@@ -16,6 +22,15 @@ function buildMaskStyle(src = '') {
     maskSize: 'contain',
     WebkitMaskPosition: 'center',
     maskPosition: 'center',
+  };
+}
+
+function buildOverlayStyle(src = '', opacity = 0) {
+  if (!src) return { opacity: 0 };
+  return {
+    ...OVERLAY_BASE_STYLE,
+    backgroundImage: `url(${src})`,
+    opacity,
   };
 }
 
@@ -86,8 +101,9 @@ export default function MuscleSelector({
 
           const isSelected = selectedIds.includes(muscle.id);
           const isHovered = hoveredId === muscle.id;
-          const opacity = isSelected ? 0.95 : isHovered ? 0.6 : 0;
+          const opacity = isSelected ? 1 : isHovered ? 0.9 : 0;
           const maskStyle = buildMaskStyle(highlight);
+          const overlayStyle = buildOverlayStyle(highlight, opacity);
 
           return (
             <button
@@ -101,19 +117,20 @@ export default function MuscleSelector({
               onFocus={() => setHoveredId(muscle.id)}
               onBlur={() => setHoveredId(null)}
               className="absolute inset-0 focus-visible:outline-none"
-              style={{ ...maskStyle, cursor: 'pointer' }}
+              style={{
+                ...maskStyle,
+                cursor: 'pointer',
+              }}
             >
               <span className="sr-only">Toggle {muscle.label}</span>
               <span
                 aria-hidden="true"
-                className="absolute inset-0 transition duration-200"
+                className="pointer-events-none absolute inset-0 transition-opacity duration-200"
                 style={{
-                  ...maskStyle,
-                  opacity,
-                  background: isSelected
-                    ? 'linear-gradient(135deg, rgba(16,185,129,0.95), rgba(13,148,136,0.85))'
-                    : 'linear-gradient(135deg, rgba(45,212,191,0.6), rgba(20,184,166,0.55))',
-                  mixBlendMode: 'multiply',
+                  ...overlayStyle,
+                  filter: isSelected
+                    ? 'drop-shadow(0 12px 18px rgba(16,185,129,0.28))'
+                    : 'drop-shadow(0 10px 12px rgba(45,212,191,0.2))',
                 }}
               />
             </button>
@@ -149,9 +166,9 @@ export default function MuscleSelector({
 
         {musclesForView.map((muscle) => {
           const highlight = muscle.highlightUrl || muscle.secondaryUrl;
-          const maskStyle = buildMaskStyle(highlight);
           const isSelected = selectedIds.includes(muscle.id);
           const isHovered = hoveredId === muscle.id;
+          const overlayStyle = buildOverlayStyle(highlight, isSelected || isHovered ? 1 : 0.65);
 
           return (
             <button
@@ -172,14 +189,12 @@ export default function MuscleSelector({
                 {highlight ? (
                   <span
                     aria-hidden="true"
-                    className="absolute inset-0"
+                    className="absolute inset-0 transition-opacity duration-200"
                     style={{
-                      ...maskStyle,
-                      background: isSelected
-                        ? 'linear-gradient(135deg, rgba(16,185,129,0.95), rgba(13,148,136,0.8))'
-                        : 'linear-gradient(135deg, rgba(94,234,212,0.65), rgba(45,212,191,0.6))',
-                      opacity: isSelected || isHovered ? 1 : 0.6,
-                      mixBlendMode: 'multiply',
+                      ...overlayStyle,
+                      filter: isSelected
+                        ? 'drop-shadow(0 10px 14px rgba(16,185,129,0.28))'
+                        : 'grayscale(0.2) saturate(1.1)',
                     }}
                   />
                 ) : (
