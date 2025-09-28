@@ -4,16 +4,41 @@ import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
 import { ExternalLink } from "lucide-react";
 
-export default function MealHistoryCard({ meal }) {
+export default function MealHistoryCard({ meal, onSelect }) {
   const mealTypeColors = {
     breakfast: "bg-yellow-100 text-yellow-800 border-yellow-200",
-    lunch: "bg-blue-100 text-blue-800 border-blue-200", 
+    lunch: "bg-blue-100 text-blue-800 border-blue-200",
     dinner: "bg-purple-100 text-purple-800 border-purple-200",
     snack: "bg-green-100 text-green-800 border-green-200"
   };
 
+  const handleClick = () => {
+    if (typeof onSelect === 'function') {
+      onSelect(meal);
+    }
+  };
+
+  const interactiveProps = onSelect
+    ? {
+        role: 'button',
+        tabIndex: 0,
+        onClick: handleClick,
+        onKeyDown: (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            handleClick();
+          }
+        }
+      }
+    : {};
+
   return (
-    <Card className="border-0 shadow-lg rounded-2xl hover:shadow-xl transition-all duration-300">
+    <Card
+      className={`border-0 shadow-lg rounded-2xl transition-all duration-300 ${
+        onSelect ? 'hover:shadow-xl hover:-translate-y-0.5 cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500' : ''
+      }`}
+      {...interactiveProps}
+    >
       <CardContent className="p-6">
         <div className="flex gap-6">
           {/* Photo */}
@@ -36,6 +61,8 @@ export default function MealHistoryCard({ meal }) {
                 target="_blank"
                 rel="noopener noreferrer"
                 className="absolute inset-0 bg-black/0 hover:bg-black/20 transition-colors duration-200 flex items-center justify-center"
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
               >
                 <ExternalLink className="w-4 h-4 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
               </a>
@@ -52,7 +79,7 @@ export default function MealHistoryCard({ meal }) {
                     {meal.meal_type}
                   </Badge>
                 </div>
-                
+
                 <div className="text-sm text-gray-500 mb-3">
                   {format(new Date(meal.meal_date || meal.created_date), 'EEEE, MMMM d, yyyy')}
                 </div>

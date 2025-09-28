@@ -70,10 +70,12 @@ export default function Layout({ children, currentPageName }) {
                 <SidebarMenu className="space-y-2">
                   {navigationItems.map((item) => (
                     <SidebarMenuItem key={item.title}>
-                      <SidebarMenuButton 
-                        asChild 
+                      <SidebarMenuButton
+                        asChild
                         className={`hover:bg-emerald-50 hover:text-emerald-700 transition-all duration-300 rounded-xl h-12 ${
-                          location.pathname === item.url ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : ''
+                          location.pathname.toLowerCase().startsWith(item.url.toLowerCase())
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                            : ''
                         }`}
                       >
                         <Link to={item.url} className="flex items-center gap-4 px-4 py-3">

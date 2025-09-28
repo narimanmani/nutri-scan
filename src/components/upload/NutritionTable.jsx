@@ -1,22 +1,368 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Save, Edit3, Loader2 } from "lucide-react";
+import { Save, Edit3, Loader2, ImagePlus, Plus, Trash2, ChevronDown, ChevronUp } from "lucide-react";
+import { getDataUrlFromFile } from "@/api/openaiClient";
 
-export default function NutritionTable({ initialData, onSave, onCancel, isSaving }) {
-  const [editedData, setEditedData] = useState(initialData);
+const NUTRIENT_FIELDS = [
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'fiber',
+  'sugar',
+  'sodium',
+  'potassium',
+  'calcium',
+  'iron',
+  'vitamin_c',
+  'vitamin_a'
+];
 
-  const handleInputChange = (field, value) => {
-    setEditedData(prev => ({
+const PRIMARY_NUTRIENTS = ['calories', 'protein', 'carbs', 'fat'];
+const MICRO_NUTRIENTS = NUTRIENT_FIELDS.filter((field) => !PRIMARY_NUTRIENTS.includes(field));
+
+const CANONICAL_UNITS = ['g', 'ml', 'oz', 'cup', 'serving'];
+
+const UNIT_ALIASES = {
+  g: 'g',
+  gram: 'g',
+  grams: 'g',
+  "g (grams)": 'g',
+  kilogram: 'g',
+  kilograms: 'g',
+  kg: 'g',
+  ml: 'ml',
+  milliliter: 'ml',
+  milliliters: 'ml',
+  millilitre: 'ml',
+  millilitres: 'ml',
+  'ml (milliliters)': 'ml',
+  liter: 'ml',
+  liters: 'ml',
+  litre: 'ml',
+  litres: 'ml',
+  l: 'ml',
+  ounce: 'oz',
+  ounces: 'oz',
+  'fl oz': 'oz',
+  oz: 'oz',
+  cup: 'cup',
+  cups: 'cup',
+  serving: 'serving',
+  servings: 'serving',
+  portion: 'serving',
+  portions: 'serving'
+};
+
+function canonicalizeUnit(unit) {
+  if (typeof unit !== 'string') {
+    return 'g';
+  }
+
+  const normalized = unit.trim().toLowerCase();
+  if (normalized.length === 0) {
+    return 'g';
+  }
+
+  const mapped = UNIT_ALIASES[normalized];
+  if (mapped) {
+    return mapped;
+  }
+
+  return CANONICAL_UNITS.includes(normalized) ? normalized : 'g';
+}
+
+const UNIT_OPTIONS = [
+  { value: 'g', label: 'g (grams)' },
+  { value: 'ml', label: 'ml (milliliters)' },
+  { value: 'oz', label: 'oz (ounces)' },
+  { value: 'cup', label: 'cup' },
+  { value: 'serving', label: 'serving' }
+];
+
+function generateIngredientId() {
+  const globalCrypto = typeof globalThis !== 'undefined' ? globalThis.crypto : null;
+  if (globalCrypto?.randomUUID) {
+    return globalCrypto.randomUUID();
+  }
+  return `ingredient_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function createEmptyNutrients() {
+  return NUTRIENT_FIELDS.reduce((acc, field) => {
+    acc[field] = 0;
+    return acc;
+  }, {});
+}
+
+function computePerUnit(ingredient) {
+  const safeAmount = Number(ingredient.amount) > 0 ? Number(ingredient.amount) : 1;
+  return NUTRIENT_FIELDS.reduce((acc, field) => {
+    acc[field] = safeAmount > 0 ? (Number(ingredient[field]) || 0) / safeAmount : 0;
+    return acc;
+  }, {});
+}
+
+function normalizeIngredient(ingredient, index = 0) {
+  const safe = typeof ingredient === 'object' && ingredient !== null ? { ...ingredient } : {};
+  const normalized = {
+    id: typeof safe.id === 'string' && safe.id.length > 0 ? safe.id : generateIngredientId(),
+    name:
+      typeof safe.name === 'string' && safe.name.length > 0
+        ? safe.name
+        : `Ingredient ${index + 1}`,
+    unit: canonicalizeUnit(safe.unit),
+    amount: Number(safe.amount) || 0,
+    ...createEmptyNutrients(),
+  };
+
+  NUTRIENT_FIELDS.forEach((field) => {
+    const parsed = Number(safe[field]);
+    normalized[field] = Number.isFinite(parsed) ? parsed : 0;
+  });
+
+  normalized._perUnit = computePerUnit(normalized);
+
+  return normalized;
+}
+
+function calculateTotals(ingredients = []) {
+  return ingredients.reduce(
+    (totals, ingredient) => {
+      NUTRIENT_FIELDS.forEach((field) => {
+        totals[field] += Number(ingredient[field]) || 0;
+      });
+      return totals;
+    },
+    createEmptyNutrients()
+  );
+}
+
+function createFallbackIngredient(meal) {
+  const ingredient = normalizeIngredient(
+    {
+      id: generateIngredientId(),
+      name: meal?.meal_name ? `${meal.meal_name} serving` : 'Meal serving',
+      unit: 'serving',
+      amount: 1,
+      ...NUTRIENT_FIELDS.reduce((acc, field) => {
+        acc[field] = Number(meal?.[field]) || 0;
+        return acc;
+      }, {})
+    },
+    0
+  );
+  ingredient._perUnit = computePerUnit(ingredient);
+  return ingredient;
+}
+
+function normalizeMeal(initialData) {
+  const base = {
+    meal_name: '',
+    meal_type: 'lunch',
+    meal_date: '',
+    notes: '',
+    photo_url: '',
+    analysis_notes: '',
+    ...initialData
+  };
+
+  const normalizedIngredients = Array.isArray(base.ingredients) && base.ingredients.length > 0
+    ? base.ingredients.map((ingredient, index) => normalizeIngredient(ingredient, index))
+    : [createFallbackIngredient(base)];
+
+  const totals = calculateTotals(normalizedIngredients);
+
+  const normalizedMeal = {
+    ...base,
+    ingredients: normalizedIngredients
+  };
+
+  NUTRIENT_FIELDS.forEach((field) => {
+    normalizedMeal[field] = totals[field];
+  });
+
+  return normalizedMeal;
+}
+
+function sanitizeMealForSave(meal) {
+  const cleanedIngredients = (meal.ingredients || []).map(({ _perUnit, ...rest }) => rest);
+  const totals = calculateTotals(cleanedIngredients);
+
+  return {
+    ...meal,
+    ...totals,
+    ingredients: cleanedIngredients
+  };
+}
+
+function formatUnitLabel(unit) {
+  return UNIT_OPTIONS.find((option) => option.value === unit)?.label || unit;
+}
+
+function formatTotalValue(field, value) {
+  const numeric = Number(value) || 0;
+
+  if (field === 'calories') {
+    return numeric.toFixed(0);
+  }
+
+  if (['sodium', 'potassium', 'calcium', 'vitamin_a'].includes(field)) {
+    return Math.round(numeric).toString();
+  }
+
+  return numeric.toFixed(1);
+}
+
+export default function NutritionTable({ initialData, onSave, onCancel, isSaving, allowPhotoChange = false }) {
+  const [editedData, setEditedData] = useState(normalizeMeal(initialData));
+  const [expandedIngredientId, setExpandedIngredientId] = useState(null);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    setEditedData(normalizeMeal(initialData));
+    setExpandedIngredientId(null);
+  }, [initialData]);
+
+  const handleBasicFieldChange = (field, value) => {
+    setEditedData((prev) => ({
       ...prev,
-      [field]: field === 'meal_name' || field === 'notes' || field === 'meal_date' || field === 'meal_type' 
-        ? value 
-        : parseFloat(value) || 0
+      [field]: value
     }));
+  };
+
+  const handleIngredientChange = (id, field, value) => {
+    setEditedData((prev) => {
+      const ingredients = prev.ingredients.map((ingredient) => {
+        if (ingredient.id !== id) {
+          return ingredient;
+        }
+
+        if (field === 'name') {
+          return { ...ingredient, name: value };
+        }
+
+        if (field === 'unit') {
+          return { ...ingredient, unit: value };
+        }
+
+        if (field === 'amount') {
+          const numericAmount = Math.max(0, parseFloat(value) || 0);
+          const perUnit = ingredient._perUnit || computePerUnit(ingredient);
+          const updated = {
+            ...ingredient,
+            amount: numericAmount,
+          };
+          NUTRIENT_FIELDS.forEach((nutrient) => {
+            const density = perUnit[nutrient] ?? 0;
+            updated[nutrient] = numericAmount > 0 ? Number((density * numericAmount).toFixed(2)) : 0;
+          });
+          updated._perUnit = perUnit;
+          return updated;
+        }
+
+        if (NUTRIENT_FIELDS.includes(field)) {
+          const numericValue = Math.max(0, parseFloat(value) || 0);
+          const safeAmount = Number(ingredient.amount) > 0 ? Number(ingredient.amount) : 1;
+          const perUnit = { ...(ingredient._perUnit || computePerUnit(ingredient)) };
+          perUnit[field] = safeAmount > 0 ? numericValue / safeAmount : 0;
+          return {
+            ...ingredient,
+            [field]: numericValue,
+            _perUnit: perUnit
+          };
+        }
+
+        return ingredient;
+      });
+
+      const totals = calculateTotals(ingredients);
+
+      return {
+        ...prev,
+        ...totals,
+        ingredients
+      };
+    });
+  };
+
+  const handleAddIngredient = () => {
+    setEditedData((prev) => {
+      const nextIngredient = normalizeIngredient(
+        {
+          id: generateIngredientId(),
+          name: 'New ingredient',
+          amount: 100,
+          unit: 'g',
+          ...createEmptyNutrients()
+        },
+        prev.ingredients?.length || 0
+      );
+      nextIngredient._perUnit = computePerUnit(nextIngredient);
+      const ingredients = [...(prev.ingredients || []), nextIngredient];
+      const totals = calculateTotals(ingredients);
+
+      return {
+        ...prev,
+        ...totals,
+        ingredients
+      };
+    });
+  };
+
+  const handleRemoveIngredient = (id) => {
+    setExpandedIngredientId((prevExpanded) => (prevExpanded === id ? null : prevExpanded));
+    setEditedData((prev) => {
+      const remaining = (prev.ingredients || []).filter((ingredient) => ingredient.id !== id);
+      const ingredients =
+        remaining.length > 0
+          ? remaining
+          : [
+              normalizeIngredient(
+                {
+                  id: generateIngredientId(),
+                  name: 'New ingredient',
+                  amount: 0,
+                  unit: 'g',
+                  ...createEmptyNutrients()
+                },
+                0
+              )
+            ];
+      const totals = calculateTotals(ingredients);
+
+      return {
+        ...prev,
+        ...totals,
+        ingredients
+      };
+    });
+  };
+
+  const handlePhotoSelect = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const dataUrl = await getDataUrlFromFile(file);
+      setEditedData((prev) => ({
+        ...prev,
+        photo_url: dataUrl
+      }));
+    } catch (error) {
+      console.error('Failed to process the selected photo:', error);
+    }
+  };
+
+  const handleSaveMeal = () => {
+    onSave(sanitizeMealForSave(editedData));
   };
 
   const nutritionFields = [
@@ -36,6 +382,193 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
 
   return (
     <div className="space-y-6">
+      {/* Ingredient Breakdown */}
+      <Card className="border-0 shadow-lg rounded-2xl">
+        <CardHeader className="p-6 pb-4">
+          <CardTitle className="text-xl text-gray-900">Ingredient Breakdown</CardTitle>
+          <p className="text-sm text-gray-600 mt-2">
+            Adjust the detected ingredient portions or add new ones. Nutrient totals update automatically based on your entries.
+          </p>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-100 text-sm">
+              <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                <tr>
+                  <th className="px-6 py-3 text-left">Ingredient</th>
+                  <th className="px-4 py-3 text-left w-32">Amount</th>
+                  <th className="px-4 py-3 text-left w-36">Unit</th>
+                  <th className="px-4 py-3 text-left w-28">Calories</th>
+                  <th className="px-4 py-3 text-left w-28">Protein (g)</th>
+                  <th className="px-4 py-3 text-left w-28">Carbs (g)</th>
+                  <th className="px-4 py-3 text-left w-28">Fat (g)</th>
+                  <th className="px-4 py-3 text-right w-24">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 bg-white">
+                {(editedData.ingredients || []).map((ingredient) => (
+                  <React.Fragment key={ingredient.id}>
+                    <tr>
+                      <td className="px-6 py-4 align-top">
+                        <Input
+                          value={ingredient.name}
+                          onChange={(event) => handleIngredientChange(ingredient.id, 'name', event.target.value)}
+                          placeholder="e.g. Grilled chicken"
+                          className="rounded-xl border-gray-200"
+                        />
+                        <p className="text-xs text-gray-400 mt-2">
+                          {formatUnitLabel(ingredient.unit)} detected
+                        </p>
+                      </td>
+                      <td className="px-4 py-4 align-top">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={ingredient.amount}
+                          onChange={(event) => handleIngredientChange(ingredient.id, 'amount', event.target.value)}
+                          className="rounded-xl border-gray-200"
+                        />
+                      </td>
+                      <td className="px-4 py-4 align-top">
+                        <Select
+                          value={ingredient.unit}
+                          onValueChange={(value) => handleIngredientChange(ingredient.id, 'unit', value)}
+                        >
+                          <SelectTrigger className="rounded-xl border-gray-200">
+                            <SelectValue placeholder="Select unit" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {UNIT_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </td>
+                      <td className="px-4 py-4 align-top">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={ingredient.calories}
+                          onChange={(event) => handleIngredientChange(ingredient.id, 'calories', event.target.value)}
+                          className="rounded-xl border-gray-200"
+                        />
+                      </td>
+                      <td className="px-4 py-4 align-top">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={ingredient.protein}
+                          onChange={(event) => handleIngredientChange(ingredient.id, 'protein', event.target.value)}
+                          className="rounded-xl border-gray-200"
+                        />
+                      </td>
+                      <td className="px-4 py-4 align-top">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={ingredient.carbs}
+                          onChange={(event) => handleIngredientChange(ingredient.id, 'carbs', event.target.value)}
+                          className="rounded-xl border-gray-200"
+                        />
+                      </td>
+                      <td className="px-4 py-4 align-top">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={ingredient.fat}
+                          onChange={(event) => handleIngredientChange(ingredient.id, 'fat', event.target.value)}
+                          className="rounded-xl border-gray-200"
+                        />
+                      </td>
+                      <td className="px-4 py-4 align-top">
+                        <div className="flex items-center justify-end gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="h-9 w-9 rounded-xl border-gray-200"
+                            onClick={() =>
+                              setExpandedIngredientId((prev) =>
+                                prev === ingredient.id ? null : ingredient.id
+                              )
+                            }
+                          >
+                            {expandedIngredientId === ingredient.id ? (
+                              <ChevronUp className="h-4 w-4" />
+                            ) : (
+                              <ChevronDown className="h-4 w-4" />
+                            )}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="icon"
+                            className="h-9 w-9 rounded-xl"
+                            onClick={() => handleRemoveIngredient(ingredient.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                    {expandedIngredientId === ingredient.id && (
+                      <tr>
+                        <td colSpan={8} className="px-6 pb-6">
+                          <div className="mt-2 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
+                            <p className="text-sm font-medium text-emerald-800">
+                              Micronutrients
+                            </p>
+                            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                              {MICRO_NUTRIENTS.map((field) => (
+                                <div key={field} className="space-y-1">
+                                  <Label className="text-xs font-medium text-emerald-900">
+                                    {nutritionFields.find((item) => item.key === field)?.label}
+                                  </Label>
+                                  <Input
+                                    type="number"
+                                    min="0"
+                                    step={field === 'sodium' || field === 'potassium' || field === 'calcium' ? '1' : '0.1'}
+                                    value={ingredient[field]}
+                                    onChange={(event) =>
+                                      handleIngredientChange(ingredient.id, field, event.target.value)
+                                    }
+                                    className="rounded-xl border-emerald-100 bg-white"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex flex-col gap-3 p-6 border-t border-gray-100 bg-gray-50/80">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleAddIngredient}
+              className="self-start rounded-xl border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+            >
+              <Plus className="mr-2 h-4 w-4" /> Add ingredient
+            </Button>
+            <p className="text-xs text-gray-500">
+              Tip: Adjust the portion sizes to match what you actually ate. All nutrient totals below will reflect these changes instantly.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Photo Preview */}
       <Card className="border-0 shadow-lg rounded-2xl overflow-hidden">
         <CardContent className="p-0">
@@ -44,6 +577,26 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
             alt="Analyzed meal"
             className="w-full h-48 object-cover"
           />
+          {allowPhotoChange && (
+            <div className="p-4 bg-gray-50 border-t border-gray-100 flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <ImagePlus className="w-4 h-4 mr-2" />
+                Change photo
+              </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handlePhotoSelect}
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -63,16 +616,16 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
               <Input
                 id="meal_name"
                 value={editedData.meal_name || ''}
-                onChange={(e) => handleInputChange('meal_name', e.target.value)}
+                onChange={(event) => handleBasicFieldChange('meal_name', event.target.value)}
                 className="mt-2 rounded-xl border-gray-200 focus:border-emerald-300 focus:ring-emerald-200"
               />
             </div>
-            
+
             <div>
               <Label htmlFor="meal_type" className="text-sm font-medium text-gray-700">Meal Type</Label>
-              <Select 
-                value={editedData.meal_type || 'lunch'} 
-                onValueChange={(value) => handleInputChange('meal_type', value)}
+              <Select
+                value={editedData.meal_type || 'lunch'}
+                onValueChange={(value) => handleBasicFieldChange('meal_type', value)}
               >
                 <SelectTrigger className="mt-2 rounded-xl border-gray-200">
                   <SelectValue placeholder="Select meal type" />
@@ -85,14 +638,14 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
                 </SelectContent>
               </Select>
             </div>
-            
+
             <div>
               <Label htmlFor="meal_date" className="text-sm font-medium text-gray-700">Date</Label>
               <Input
                 id="meal_date"
                 type="date"
                 value={editedData.meal_date || ''}
-                onChange={(e) => handleInputChange('meal_date', e.target.value)}
+                onChange={(event) => handleBasicFieldChange('meal_date', event.target.value)}
                 className="mt-2 rounded-xl border-gray-200 focus:border-emerald-300 focus:ring-emerald-200"
               />
             </div>
@@ -100,21 +653,22 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
 
           {/* Nutrition Grid */}
           <div>
-            <h3 className="font-semibold text-gray-900 mb-4">Nutritional Information</h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-gray-900">Nutritional Information</h3>
+              <span className="text-xs text-gray-500">Totals update from the ingredient table above</span>
+            </div>
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {nutritionFields.map((field) => (
                 <div key={field.key} className="space-y-2">
-                  <Label htmlFor={field.key} className="text-sm font-medium text-gray-700">
+                  <Label className="text-sm font-medium text-gray-700">
                     {field.label} ({field.unit})
                   </Label>
                   <Input
                     id={field.key}
                     type="number"
-                    step={field.key === 'calories' ? '1' : '0.1'}
-                    min="0"
-                    value={editedData[field.key] || ''}
-                    onChange={(e) => handleInputChange(field.key, e.target.value)}
-                    className="rounded-xl border-gray-200 focus:border-emerald-300 focus:ring-emerald-200"
+                    readOnly
+                    value={formatTotalValue(field.key, editedData[field.key])}
+                    className="rounded-xl border-gray-200 bg-gray-50 text-gray-700"
                   />
                 </div>
               ))}
@@ -127,7 +681,7 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
             <Textarea
               id="notes"
               value={editedData.notes || ''}
-              onChange={(e) => handleInputChange('notes', e.target.value)}
+              onChange={(event) => handleBasicFieldChange('notes', event.target.value)}
               placeholder="Add any additional notes about this meal..."
               className="mt-2 rounded-xl border-gray-200 focus:border-emerald-300 focus:ring-emerald-200"
               rows={3}
@@ -137,7 +691,7 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
           {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row gap-4 pt-4">
             <Button
-              onClick={() => onSave(editedData)}
+              onClick={handleSaveMeal}
               disabled={isSaving}
               className="bg-emerald-600 hover:bg-emerald-700 px-8 py-3 rounded-xl flex items-center gap-2 flex-1 sm:flex-none"
             >
@@ -153,7 +707,7 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
                 </>
               )}
             </Button>
-            
+
             <Button
               variant="outline"
               onClick={onCancel}

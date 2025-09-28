@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { Activity } from "lucide-react";
 
-export default function NutritionChart({ meals, isLoading }) {
+export default function NutritionChart({ meals, isLoading, dateLabel = "Today" }) {
   if (isLoading) {
     return (
       <Card className="border-0 shadow-lg rounded-2xl animate-pulse">
@@ -84,7 +84,7 @@ export default function NutritionChart({ meals, isLoading }) {
             </ResponsiveContainer>
           ) : (
             <div className="h-64 flex items-center justify-center text-gray-500">
-              No nutrition data for today
+              No nutrition data for {dateLabel.toLowerCase()}
             </div>
           )}
         </CardContent>
@@ -111,7 +111,7 @@ export default function NutritionChart({ meals, isLoading }) {
             </ResponsiveContainer>
           ) : (
             <div className="h-64 flex items-center justify-center text-gray-500">
-              No micronutrient data for today
+              No micronutrient data for {dateLabel.toLowerCase()}
             </div>
           )}
         </CardContent>

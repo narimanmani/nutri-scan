@@ -1,0 +1,21 @@
+.rdp {
+  --rdp-accent-color: #10b981;
+  --rdp-accent-color-dark: #047857;
+  --rdp-outline: 2px solid var(--rdp-accent-color);
+  --rdp-outline-selected: 2px solid var(--rdp-accent-color);
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.rdp-day_logged {
+  background-color: rgba(16, 185, 129, 0.15);
+  color: #047857;
+  font-weight: 600;
+}
+
+.rdp-button_reset:hover:not([disabled]):not(.rdp-day_outside) {
+  background-color: rgba(16, 185, 129, 0.1);
+}
+
+.rdp-nav_button:hover {
+  background-color: rgba(16, 185, 129, 0.1);
+}

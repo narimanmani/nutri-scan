@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Meal } from "@/api/entities";
-import { format } from "date-fns";
+import { format, isSameDay, startOfDay } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
@@ -12,10 +12,12 @@ import DailyStats from "../components/dashboard/DailyStats";
 import NutritionChart from "../components/dashboard/NutritionChart";
 import RecentMeals from "../components/dashboard/RecentMeals";
 import CalorieProgress from "../components/dashboard/CalorieProgress";
+import DateNavigator from "../components/dashboard/DateNavigator";
 
 export default function Dashboard() {
   const [meals, setMeals] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState(() => startOfDay(new Date()));
 
   useEffect(() => {
     loadMeals();
@@ -32,13 +34,22 @@ export default function Dashboard() {
     setIsLoading(false);
   };
 
-  const dashboardStats = useMemo(() => buildDashboardStats(meals), [meals]);
+  const dashboardStats = useMemo(() => buildDashboardStats(meals, selectedDate), [meals, selectedDate]);
 
-  const todayCalories = dashboardStats.totals.today.calories;
+  const selectedDayTotals = dashboardStats.totals.today;
   const weeklyCalories = dashboardStats.totals.week.calories;
   const avgDailyCalories = dashboardStats.averages.weekDailyCalories;
   const averageMealCalories = dashboardStats.averages.mealCalories;
   const totalMeals = dashboardStats.counts.total;
+  const selectedDayMeals = dashboardStats.todayMeals;
+
+  const isSelectedToday = isSameDay(selectedDate, new Date());
+  const selectedDayLabel = isSelectedToday ? 'Today' : format(selectedDate, 'MMM d, yyyy');
+
+  const handleDateSelect = (date) => {
+    if (!date) return;
+    setSelectedDate(startOfDay(date));
+  };
 
   return (
     <div className="p-4 md:p-8 min-h-screen">
@@ -66,16 +77,16 @@ export default function Dashboard() {
           <Card className="bg-white border-0 shadow-lg hover:shadow-xl transition-all duration-300">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-medium text-gray-600">Today&apos;s Calories</CardTitle>
+                <CardTitle className="text-sm font-medium text-gray-600">Calories on {selectedDayLabel}</CardTitle>
                 <div className="p-2 bg-emerald-100 rounded-lg">
                   <Activity className="w-4 h-4 text-emerald-600" />
                 </div>
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-gray-900 mb-2">{todayCalories}</div>
+              <div className="text-3xl font-bold text-gray-900 mb-2">{selectedDayTotals.calories}</div>
               <p className="text-sm text-gray-500">
-                {dashboardStats.counts.today} meals logged today
+                {dashboardStats.counts.today} meals logged
               </p>
             </CardContent>
           </Card>
@@ -132,25 +143,38 @@ export default function Dashboard() {
           </Card>
         </div>
 
-        <DailyStats
-          calories={todayCalories}
-          protein={dashboardStats.totals.today.protein}
-          carbs={dashboardStats.totals.today.carbs}
-          fat={dashboardStats.totals.today.fat}
-        />
+        <div className="space-y-4">
+          <h2 className="text-xl font-semibold text-gray-900">
+            Nutrition snapshot for {isSelectedToday ? 'today' : format(selectedDate, 'MMMM d, yyyy')}
+          </h2>
+          <DailyStats
+            calories={selectedDayTotals.calories}
+            protein={selectedDayTotals.protein}
+            carbs={selectedDayTotals.carbs}
+            fat={selectedDayTotals.fat}
+          />
+        </div>
 
         {/* Main Content Grid */}
         <div className="grid lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-8">
             <CalorieProgress
-              current={todayCalories}
+              current={selectedDayTotals.calories}
               target={2000}
-              meals={dashboardStats.todayMeals}
+              meals={selectedDayMeals}
+              dateLabel={selectedDayLabel}
             />
-            <NutritionChart meals={dashboardStats.todayMeals} isLoading={isLoading} />
+            <NutritionChart meals={selectedDayMeals} isLoading={isLoading} dateLabel={selectedDayLabel} />
           </div>
           <div>
-            <RecentMeals meals={meals.slice(0, 8)} isLoading={isLoading} />
+            <div className="space-y-6">
+              <DateNavigator
+                selectedDate={selectedDate}
+                onSelectDate={handleDateSelect}
+                meals={meals}
+              />
+              <RecentMeals meals={meals.slice(0, 8)} isLoading={isLoading} />
+            </div>
           </div>
         </div>
       </div>

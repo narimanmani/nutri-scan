@@ -4,7 +4,7 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Target, TrendingUp } from "lucide-react";
 
-export default function CalorieProgress({ current, target, meals }) {
+export default function CalorieProgress({ current, target, meals, dateLabel = "Today" }) {
   const percentage = Math.min((current / target) * 100, 100);
   const remaining = Math.max(target - current, 0);
   
@@ -20,7 +20,7 @@ export default function CalorieProgress({ current, target, meals }) {
       <CardHeader className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white p-6">
         <CardTitle className="flex items-center gap-3 text-xl">
           <Target className="w-6 h-6" />
-          Today's Progress
+          {dateLabel} Progress
         </CardTitle>
       </CardHeader>
       <CardContent className="p-6 space-y-6">
@@ -42,7 +42,7 @@ export default function CalorieProgress({ current, target, meals }) {
           <div>
             <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
               <TrendingUp className="w-4 h-4" />
-              Today's Meals
+              Meals on {dateLabel}
             </h3>
             <div className="space-y-3">
               {meals.map((meal, index) => (
