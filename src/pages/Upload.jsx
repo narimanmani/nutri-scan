@@ -1,6 +1,6 @@
-import React, { useState, useCallback, useRef } from "react";
+import React, { useState } from "react";
 import { Meal } from "@/api/entities";
-import { UploadFile, InvokeLLM } from "@/api/integrations";
+import { analyzeMealImage, getDataUrlFromFile } from "@/api/openaiClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -25,11 +25,17 @@ export default function UploadPage() {
   const handlePhotoUpload = async (file) => {
     setError(null);
     try {
-      const { file_url } = await UploadFile({ file });
-      setUploadedPhoto({ file, url: file_url });
+      const previewUrl = URL.createObjectURL(file);
+      const dataUrl = await getDataUrlFromFile(file);
+
+      setUploadedPhoto({
+        file,
+        url: previewUrl,
+        dataUrl
+      });
       setStep('analyze');
     } catch (error) {
-      setError("Failed to upload photo. Please try again.");
+      setError("Failed to process the photo. Please try again.");
       console.error("Upload error:", error);
     }
   };
@@ -41,46 +47,25 @@ export default function UploadPage() {
     setError(null);
     
     try {
-      const result = await InvokeLLM({
-        prompt: `Analyze this food image and provide detailed nutritional information. 
-        Identify the food items, estimate portion sizes, and calculate comprehensive nutrition data.
-        Be as accurate as possible based on what you can see in the image.
-        Provide a descriptive name for the meal/dish.`,
-        file_urls: [uploadedPhoto.url],
-        response_json_schema: {
-          type: "object",
-          properties: {
-            meal_name: { type: "string" },
-            calories: { type: "number" },
-            protein: { type: "number" },
-            carbs: { type: "number" },
-            fat: { type: "number" },
-            fiber: { type: "number" },
-            sugar: { type: "number" },
-            sodium: { type: "number" },
-            potassium: { type: "number" },
-            calcium: { type: "number" },
-            iron: { type: "number" },
-            vitamin_c: { type: "number" },
-            vitamin_a: { type: "number" },
-            analysis_notes: { type: "string" }
-          }
-        }
+      const result = await analyzeMealImage({
+        file: uploadedPhoto.file,
+        imageDataUrl: uploadedPhoto.dataUrl
       });
 
       setAnalysisResult({
         ...result,
-        photo_url: uploadedPhoto.url,
+        photo_url: uploadedPhoto.dataUrl,
         meal_date: format(new Date(), 'yyyy-MM-dd'),
-        meal_type: getMealTypeByTime()
+        meal_type: getMealTypeByTime(),
+        notes: ''
       });
       setStep('edit');
     } catch (error) {
-      setError("Failed to analyze the photo. Please try again.");
+      setError(error.message || "Failed to analyze the photo. Please try again.");
       console.error("Analysis error:", error);
+    } finally {
+      setIsAnalyzing(false);
     }
-    
-    setIsAnalyzing(false);
   };
 
   const getMealTypeByTime = () => {
@@ -107,6 +92,9 @@ export default function UploadPage() {
   };
 
   const resetUpload = () => {
+    if (uploadedPhoto?.url) {
+      URL.revokeObjectURL(uploadedPhoto.url);
+    }
     setUploadedPhoto(null);
     setAnalysisResult(null);
     setError(null);
