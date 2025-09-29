@@ -200,7 +200,10 @@ export default function MuscleSelector({
         onPointerDown={handlePointerDown}
         onClick={handleClick}
         role="presentation"
-        style={{ cursor: hoveredId != null ? 'pointer' : 'default' }}
+        style={{
+          cursor: status === 'success' && hoveredId != null ? 'pointer' : 'default',
+          pointerEvents: status === 'success' ? 'auto' : 'none',
+        }}
       >
         {baseImage ? (
           <img
