@@ -214,6 +214,16 @@ function formatTotalValue(field, value) {
   return numeric.toFixed(1);
 }
 
+function omitKey(state, key) {
+  if (!state || !Object.prototype.hasOwnProperty.call(state, key)) {
+    return state;
+  }
+
+  const next = { ...state };
+  delete next[key];
+  return next;
+}
+
 export default function NutritionTable({ initialData, onSave, onCancel, isSaving, allowPhotoChange = false }) {
   const [editedData, setEditedData] = useState(normalizeMeal(initialData));
   const [expandedIngredientId, setExpandedIngredientId] = useState(null);
@@ -222,6 +232,8 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
   const [suggestionsLoading, setSuggestionsLoading] = useState({});
   const [selectedSuggestions, setSelectedSuggestions] = useState({});
   const [estimateLoading, setEstimateLoading] = useState({});
+  const [suggestionsFetched, setSuggestionsFetched] = useState({});
+  const [suggestionsError, setSuggestionsError] = useState({});
   const suggestionTimersRef = useRef({});
   const latestQueryRef = useRef({});
   const lastEstimateSignatureRef = useRef({});
@@ -242,6 +254,8 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
     setSuggestionsLoading({});
     setSelectedSuggestions({});
     setEstimateLoading({});
+    setSuggestionsFetched({});
+    setSuggestionsError({});
     suggestionTimersRef.current = {};
     latestQueryRef.current = {};
     lastEstimateSignatureRef.current = {};
@@ -257,12 +271,14 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
     };
   }, []);
 
+  const removeSuggestionEntries = (id) => {
+    setIngredientSuggestions((prev) => omitKey(prev, id));
+    setSuggestionsFetched((prev) => omitKey(prev, id));
+    setSuggestionsError((prev) => omitKey(prev, id));
+  };
+
   const clearIngredientAiState = (id) => {
-    setIngredientSuggestions((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
+    removeSuggestionEntries(id);
     setSuggestionsLoading((prev) => {
       const next = { ...prev };
       delete next[id];
@@ -290,7 +306,7 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
 
     if (!query || query.trim().length < 2) {
       latestQueryRef.current[id] = query || '';
-      setIngredientSuggestions((prev) => ({ ...prev, [id]: [] }));
+      removeSuggestionEntries(id);
       setSuggestionsLoading((prev) => {
         const next = { ...prev };
         delete next[id];
@@ -300,6 +316,7 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
     }
 
     latestQueryRef.current[id] = query;
+    setSuggestionsError((prev) => omitKey(prev, id));
     suggestionTimersRef.current[id] = setTimeout(async () => {
       setSuggestionsLoading((prev) => ({ ...prev, [id]: true }));
       try {
@@ -308,9 +325,15 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
           return;
         }
         setIngredientSuggestions((prev) => ({ ...prev, [id]: suggestions }));
+        setSuggestionsFetched((prev) => ({ ...prev, [id]: true }));
       } catch (error) {
         console.error('Failed to fetch ingredient suggestions:', error);
         setIngredientSuggestions((prev) => ({ ...prev, [id]: [] }));
+        setSuggestionsFetched((prev) => ({ ...prev, [id]: true }));
+        setSuggestionsError((prev) => ({
+          ...prev,
+          [id]: 'Unable to fetch ingredient suggestions. Please try again.'
+        }));
       } finally {
         setSuggestionsLoading((prev) => {
           const next = { ...prev };
@@ -434,7 +457,7 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
   };
 
   const handleSuggestionSelect = (id, suggestion) => {
-    setIngredientSuggestions((prev) => ({ ...prev, [id]: [] }));
+    removeSuggestionEntries(id);
     setSelectedSuggestions((prev) => ({ ...prev, [id]: suggestion }));
     latestQueryRef.current[id] = suggestion.name;
     lastEstimateSignatureRef.current[id] = null;
@@ -630,7 +653,10 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
                 {(editedData.ingredients || []).map((ingredient) => {
                   const suggestionsForIngredient = ingredientSuggestions[ingredient.id] || [];
                   const isFetchingSuggestions = Boolean(suggestionsLoading[ingredient.id]);
+                  const hasFetchedSuggestions = Boolean(suggestionsFetched[ingredient.id]);
+                  const suggestionError = suggestionsError[ingredient.id];
                   const selectedSuggestion = selectedSuggestions[ingredient.id];
+                  const shouldShowSuggestions = isFetchingSuggestions || hasFetchedSuggestions;
 
                   return (
                     <React.Fragment key={ingredient.id}>
@@ -646,7 +672,7 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
                             {isFetchingSuggestions && (
                               <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-gray-400" />
                             )}
-                            {(isFetchingSuggestions || suggestionsForIngredient.length > 0) && (
+                            {shouldShowSuggestions && (
                               <div className="absolute left-0 right-0 bottom-full z-30 mb-2 max-h-64 min-w-[20rem] overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-xl">
                                 {suggestionsForIngredient.length === 0 ? (
                                   <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-500">
@@ -655,6 +681,8 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
                                         <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
                                         <span>Fetching suggestions…</span>
                                       </>
+                                    ) : suggestionError ? (
+                                      <span>{suggestionError}</span>
                                     ) : (
                                       <span>No suggestions found</span>
                                     )}
