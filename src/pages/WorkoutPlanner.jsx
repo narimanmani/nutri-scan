@@ -286,16 +286,49 @@ export default function WorkoutPlanner() {
                 </p>
               ) : (
                 <ol className="space-y-4 text-sm text-emerald-900/80">
-                  {section.exercises.map((exercise) => (
-                    <li key={exercise.id} className="rounded-2xl border border-emerald-100/80 bg-emerald-50/60 px-4 py-3 shadow-sm">
-                      <p className="font-semibold text-emerald-900">{exercise.name}</p>
-                      {exercise.description && (
-                        <p className="mt-1 text-xs leading-relaxed text-emerald-800/80">
-                          {sanitizeHtml(exercise.description)}
-                        </p>
-                      )}
-                    </li>
-                  ))}
+                  {section.exercises.map((exercise) => {
+                    const descriptionText = sanitizeHtml(exercise.description);
+                    const hasVideos = Array.isArray(exercise.videos) && exercise.videos.length > 0;
+
+                    return (
+                      <li
+                        key={exercise.id}
+                        className="space-y-3 rounded-2xl border border-emerald-100/80 bg-emerald-50/60 px-4 py-3 shadow-sm"
+                      >
+                        <div>
+                          <p className="font-semibold text-emerald-900">{exercise.name}</p>
+                          {descriptionText ? (
+                            <p className="mt-1 text-xs leading-relaxed text-emerald-800/80">{descriptionText}</p>
+                          ) : (
+                            <p className="mt-1 text-xs italic text-emerald-800/60">
+                              Detailed instructions will appear once wger provides them for this exercise.
+                            </p>
+                          )}
+                          {exercise.detailError && (
+                            <p className="mt-2 text-xs font-medium text-yellow-700">{exercise.detailError}</p>
+                          )}
+                        </div>
+
+                        {hasVideos && (
+                          <div className="space-y-2">
+                            {exercise.videos.map((video) => (
+                              <div key={video.id} className="overflow-hidden rounded-xl border border-emerald-200/80 bg-white">
+                                <video
+                                  className="h-full w-full"
+                                  src={video.url}
+                                  controls
+                                  playsInline
+                                  preload="metadata"
+                                >
+                                  Your browser does not support the video tag.
+                                </video>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ol>
               )}
             </article>
