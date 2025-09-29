@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import MuscleSelector from '@/components/workout/MuscleSelector.jsx';
 import { fetchAllMuscles, generateWorkoutPlanFromMuscles } from '@/api/wger.js';
+import { buildWgerAssetProxyUrl } from '@/utils/wgerAssets.js';
 
 const BODY_VIEWS = ['front', 'back'];
 const WGER_ASSET_BASE_URL = 'https://wger.de';
@@ -73,8 +74,12 @@ export default function WorkoutPlanner() {
             if (!id) return null;
 
             const label = record?.name_en || record?.name || `Muscle ${id}`;
-            const highlightUrl = toAbsoluteAssetUrl(record?.image_url_main || record?.image_url_secondary || '');
-            const secondaryUrl = toAbsoluteAssetUrl(record?.image_url_secondary || '');
+            const highlightUrl =
+              buildWgerAssetProxyUrl(record?.image_url_main || record?.image_url_secondary || '') ||
+              toAbsoluteAssetUrl(record?.image_url_main || record?.image_url_secondary || '');
+            const secondaryUrl =
+              buildWgerAssetProxyUrl(record?.image_url_secondary || record?.image_url_main || '') ||
+              toAbsoluteAssetUrl(record?.image_url_secondary || '');
             const view = record?.is_front ? 'front' : 'back';
 
             return {
