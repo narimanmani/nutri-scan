@@ -76,6 +76,8 @@ export default function WorkoutPlanner() {
             const highlightUrl = toAbsoluteAssetUrl(record?.image_url_main || record?.image_url_secondary || '');
             const secondaryUrl = toAbsoluteAssetUrl(record?.image_url_secondary || '');
             const view = record?.is_front ? 'front' : 'back';
+            const libraryIds = Array.isArray(record?.libraryIds) && record.libraryIds.length > 0 ? record.libraryIds : [id];
+            const libraryKey = typeof record?.libraryKey === 'string' ? record.libraryKey : '';
 
             return {
               id,
@@ -84,7 +86,8 @@ export default function WorkoutPlanner() {
               view,
               highlightUrl,
               secondaryUrl,
-              apiIds: [id],
+              apiIds: libraryIds,
+              libraryKey,
               description: formatDescription(label),
             };
           })
