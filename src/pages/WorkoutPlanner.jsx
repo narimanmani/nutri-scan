@@ -323,7 +323,7 @@ export default function WorkoutPlanner() {
                     {section.error}
                   </p>
                 ) : (
-                  <ol className="space-y-4 text-sm text-emerald-900/80">
+                  <div className="space-y-4 text-sm text-emerald-900/80" role="list">
                     {section.exercises.map((exercise) => {
                       const descriptionText = sanitizeHtml(exercise.description);
                       const prescriptionDetails = [
@@ -343,13 +343,26 @@ export default function WorkoutPlanner() {
                       const hasBenefits = benefits.length > 0;
                       const hasPhotos = photoUrls.length > 0;
 
+                      const hasAnimation = Boolean(exercise.animationUrl);
+
                       return (
-                        <li
+                        <div
                           key={exercise.id}
+                          role="listitem"
                           className="space-y-3 rounded-2xl border border-emerald-100/80 bg-emerald-50/60 px-4 py-3 shadow-sm"
                         >
                           <div>
                             <p className="font-semibold text-emerald-900">{exercise.name}</p>
+                            {hasAnimation && (
+                              <div className="mt-3 overflow-hidden rounded-2xl border border-emerald-100 bg-white/80">
+                                <img
+                                  src={exercise.animationUrl}
+                                  alt={exercise.animationAlt || `${exercise.name} demonstration`}
+                                  loading="lazy"
+                                  className="h-auto w-full object-cover"
+                                />
+                              </div>
+                            )}
                             {descriptionText ? (
                               <p className="mt-1 text-xs leading-relaxed text-emerald-800/80">{descriptionText}</p>
                             ) : (
@@ -427,10 +440,10 @@ export default function WorkoutPlanner() {
                               </ul>
                             </div>
                           )}
-                        </li>
+                        </div>
                       );
                     })}
-                  </ol>
+                  </div>
                 )}
               </article>
             );
