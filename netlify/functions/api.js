@@ -1,5 +1,10 @@
 const { getStore } = require('@netlify/blobs');
 
+const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 20000);
+
+const suggestionCache = new Map();
+const estimateCache = new Map();
+
 const ANALYSIS_SCHEMA = {
   name: 'meal_analysis',
   schema: {
@@ -86,6 +91,71 @@ const UNIT_ALIASES = {
   portions: 'serving'
 };
 
+const NUTRIENT_FIELDS = [
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'fiber',
+  'sugar',
+  'sodium',
+  'potassium',
+  'calcium',
+  'iron',
+  'vitamin_c',
+  'vitamin_a'
+];
+
+const DEFAULT_SUGGESTION_LIMIT = 7;
+const OPENAI_SUGGESTION_MODEL = process.env.OPENAI_SUGGESTION_MODEL || 'gpt-4o-mini';
+const OPENAI_NUTRITION_MODEL =
+  process.env.OPENAI_NUTRITION_MODEL || process.env.OPENAI_SUGGESTION_MODEL || 'gpt-4o-mini';
+
+const SUGGESTION_RESPONSE_SCHEMA = {
+  name: 'ingredient_suggestions',
+  schema: {
+    type: 'object',
+    properties: {
+      suggestions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'Stable identifier for the suggestion.' },
+            name: { type: 'string', description: 'Ingredient name a person might type.' },
+            description: {
+              type: 'string',
+              description: 'Short clarifying details such as preparation or brand.'
+            },
+            typical_unit: {
+              type: 'string',
+              description: 'Most common measuring unit such as g, cup, serving, or ml.'
+            },
+            example_portion: {
+              type: 'string',
+              description: 'Example portion string like “85 g” or “1 cup”.'
+            }
+          },
+          required: ['name']
+        }
+      }
+    },
+    required: ['suggestions']
+  }
+};
+
+const INGREDIENT_ESTIMATE_SCHEMA = {
+  name: 'ingredient_estimate',
+  schema: {
+    type: 'object',
+    properties: NUTRIENT_FIELDS.reduce((acc, field) => {
+      acc[field] = { type: 'number' };
+      return acc;
+    }, {}),
+    required: ['calories']
+  }
+};
+
 function canonicalizeUnit(unit) {
   if (typeof unit !== 'string') {
     return 'g';
@@ -104,20 +174,66 @@ function canonicalizeUnit(unit) {
   return CANONICAL_UNITS.includes(normalized) ? normalized : 'g';
 }
 
-const NUTRIENT_FIELDS = [
-  'calories',
-  'protein',
-  'carbs',
-  'fat',
-  'fiber',
-  'sugar',
-  'sodium',
-  'potassium',
-  'calcium',
-  'iron',
-  'vitamin_c',
-  'vitamin_a'
+const FALLBACK_INGREDIENTS = [
+  {
+    id: 'fallback-chicken-breast',
+    fdcId: null,
+    name: 'Grilled chicken breast',
+    description: 'Boneless, skinless breast cooked without breading.',
+    typical_unit: 'g',
+    example_portion: '85 g',
+    data_source: 'fallback',
+    perGram: { calories: 1.65, protein: 0.31, carbs: 0, fat: 0.04, fiber: 0, sugar: 0 }
+  },
+  {
+    id: 'fallback-broccoli',
+    fdcId: null,
+    name: 'Steamed broccoli florets',
+    description: 'Broccoli cooked with steam and no added butter or oil.',
+    typical_unit: 'g',
+    example_portion: '90 g',
+    data_source: 'fallback',
+    perGram: { calories: 0.35, protein: 0.028, carbs: 0.07, fat: 0.003, fiber: 0.028, sugar: 0.015 }
+  },
+  {
+    id: 'fallback-brown-rice',
+    fdcId: null,
+    name: 'Cooked brown rice',
+    description: 'Whole-grain brown rice cooked in water.',
+    typical_unit: 'cup',
+    example_portion: '1 cup',
+    data_source: 'fallback',
+    perGram: { calories: 1.11, protein: 0.024, carbs: 0.23, fat: 0.009, fiber: 0.018, sugar: 0.002 }
+  },
+  {
+    id: 'fallback-avocado',
+    fdcId: null,
+    name: 'Avocado',
+    description: 'Fresh Hass avocado, raw.',
+    typical_unit: 'g',
+    example_portion: '50 g',
+    data_source: 'fallback',
+    perGram: { calories: 1.6, protein: 0.02, carbs: 0.084, fat: 0.15, fiber: 0.067, sugar: 0.03 }
+  },
+  {
+    id: 'fallback-greek-yogurt',
+    fdcId: null,
+    name: 'Greek yogurt (plain, nonfat)',
+    description: 'Unsweetened nonfat strained yogurt.',
+    typical_unit: 'g',
+    example_portion: '170 g (6 oz)',
+    data_source: 'fallback',
+    perGram: { calories: 0.59, protein: 0.1, carbs: 0.038, fat: 0.002, fiber: 0, sugar: 0.029 }
+  }
 ];
+
+const FALLBACK_UNIT_TO_GRAMS = {
+  g: 1,
+  ml: 1,
+  oz: 28.3495,
+  cup: 240,
+  serving: 100
+};
 
 const MOCK_RESPONSE = {
   meal_name: 'Grilled Chicken Salad',
@@ -237,6 +353,343 @@ function ensureNumbers(payload) {
   });
 
   return result;
+}
+
+function fallbackSuggestions(query) {
+  if (!query || typeof query !== 'string') {
+    return FALLBACK_INGREDIENTS.slice(0, 7);
+  }
+
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return FALLBACK_INGREDIENTS.slice(0, 7);
+  }
+
+  const matches = FALLBACK_INGREDIENTS.filter((item) =>
+    item.name.toLowerCase().includes(normalized)
+  );
+
+  return (matches.length > 0 ? matches : FALLBACK_INGREDIENTS).slice(0, 7);
+}
+
+function fallbackEstimate({ ingredientName, amount, unit }) {
+  const normalizedName = typeof ingredientName === 'string' ? ingredientName.trim().toLowerCase() : '';
+  const match = FALLBACK_INGREDIENTS.find((item) =>
+    item.name.toLowerCase() === normalizedName || item.name.toLowerCase().includes(normalizedName)
+  );
+
+  const safeAmount = Number(amount) || 0;
+  const safeUnit = canonicalizeUnit(unit);
+
+  if (!match || safeAmount <= 0) {
+    return {
+      name: ingredientName || 'Ingredient',
+      amount: safeAmount,
+      unit: safeUnit,
+      calories: 0,
+      protein: 0,
+      carbs: 0,
+      fat: 0,
+      fiber: 0,
+      sugar: 0,
+      sodium: 0,
+      potassium: 0,
+      calcium: 0,
+      iron: 0,
+      vitamin_c: 0,
+      vitamin_a: 0,
+      data_source: 'fallback'
+    };
+  }
+
+  const gramsEquivalent = safeAmount * (FALLBACK_UNIT_TO_GRAMS[safeUnit] || 1);
+  const estimate = { name: match.name, amount: safeAmount, unit: safeUnit };
+
+  Object.entries(match.perGram).forEach(([key, perGram]) => {
+    estimate[key] = Number((perGram * gramsEquivalent).toFixed(2));
+  });
+
+  [
+    'calories',
+    'protein',
+    'carbs',
+    'fat',
+    'fiber',
+    'sugar',
+    'sodium',
+    'potassium',
+    'calcium',
+    'iron',
+    'vitamin_c',
+    'vitamin_a'
+  ].forEach((field) => {
+    if (estimate[field] == null) {
+      estimate[field] = 0;
+    }
+  });
+
+  estimate.data_source = 'fallback';
+  return estimate;
+}
+
+function cacheSuggestions(query, payload) {
+  const normalized = typeof query === 'string' ? query.trim().toLowerCase() : '';
+  if (!normalized) {
+    return payload;
+  }
+
+  suggestionCache.set(normalized, payload);
+  return payload;
+}
+
+function getCachedSuggestions(query) {
+  const normalized = typeof query === 'string' ? query.trim().toLowerCase() : '';
+  return normalized ? suggestionCache.get(normalized) : undefined;
+}
+
+function cacheEstimate(signature, payload) {
+  if (!signature) {
+    return payload;
+  }
+
+  estimateCache.set(signature, payload);
+  return payload;
+}
+
+function getCachedEstimate(signature) {
+  return signature ? estimateCache.get(signature) : undefined;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = OPENAI_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error(`Request to ${url} timed out after ${timeoutMs}ms`);
+      timeoutError.code = 'TIMEOUT';
+      throw timeoutError;
+    }
+    throw error;
+  }
+}
+
+function slugify(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function normalizeAiSuggestion(rawSuggestion, index = 0) {
+  if (!rawSuggestion) {
+    return null;
+  }
+
+  const name = typeof rawSuggestion.name === 'string' ? rawSuggestion.name.trim() : '';
+  if (!name) {
+    return null;
+  }
+
+  const baseId =
+    typeof rawSuggestion.id === 'string' && rawSuggestion.id.trim().length > 0
+      ? rawSuggestion.id.trim()
+      : slugify(`${name}-${index}`) || `suggestion_${index}`;
+
+  const suggestion = {
+    id: baseId,
+    name,
+    data_source: 'openai'
+  };
+
+  if (typeof rawSuggestion.description === 'string' && rawSuggestion.description.trim()) {
+    suggestion.description = rawSuggestion.description.trim();
+  }
+
+  if (typeof rawSuggestion.example_portion === 'string' && rawSuggestion.example_portion.trim()) {
+    suggestion.example_portion = rawSuggestion.example_portion.trim();
+  }
+
+  if (typeof rawSuggestion.typical_unit === 'string' && rawSuggestion.typical_unit.trim()) {
+    suggestion.typical_unit = canonicalizeUnit(rawSuggestion.typical_unit);
+  }
+
+  return suggestion;
+}
+
+async function callOpenAiForJson({ messages, schema, model = 'gpt-4o-mini', timeoutMs = OPENAI_REQUEST_TIMEOUT_MS }) {
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is not configured.');
+  }
+
+  const response = await fetchWithTimeout(
+    'https://api.openai.com/v1/chat/completions',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        messages,
+        response_format: { type: 'json_schema', json_schema: schema }
+      })
+    },
+    timeoutMs
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error?.error?.message || `OpenAI request failed with status ${response.status}`);
+  }
+
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
+
+  if (!content) {
+    throw new Error('OpenAI response did not include any content.');
+  }
+
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    throw new Error('Failed to parse OpenAI response JSON.');
+  }
+}
+
+async function fetchAiSuggestions(query) {
+  const cached = getCachedSuggestions(query);
+  if (cached) {
+    return cached;
+  }
+
+  if (!query || typeof query !== 'string' || query.trim().length < 2) {
+    return cacheSuggestions(query, { suggestions: [] });
+  }
+
+  const trimmedQuery = query.trim();
+
+  if (!process.env.OPENAI_API_KEY) {
+    return cacheSuggestions(query, { suggestions: fallbackSuggestions(trimmedQuery) });
+  }
+
+  try {
+    const result = await callOpenAiForJson({
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You help people log meals by suggesting closely related ingredients based on their partial input. Return relevant whole foods or packaged ingredients without recipes.'
+        },
+        {
+          role: 'user',
+          content: `Suggest up to ${DEFAULT_SUGGESTION_LIMIT} ingredient ideas matching "${trimmedQuery}". Focus on realistic grocery or kitchen items and include preparation details when helpful.`
+        }
+      ],
+      schema: SUGGESTION_RESPONSE_SCHEMA,
+      model: OPENAI_SUGGESTION_MODEL
+    });
+
+    const rawSuggestions = Array.isArray(result?.suggestions) ? result.suggestions : [];
+    const suggestions = rawSuggestions
+      .map((item, index) => normalizeAiSuggestion(item, index))
+      .filter(Boolean)
+      .slice(0, DEFAULT_SUGGESTION_LIMIT);
+
+    if (suggestions.length === 0) {
+      return cacheSuggestions(query, { suggestions: fallbackSuggestions(trimmedQuery) });
+    }
+
+    return cacheSuggestions(query, { suggestions });
+  } catch (error) {
+    console.warn('OpenAI ingredient suggestion request failed. Using fallback data.', error);
+    return cacheSuggestions(query, { suggestions: fallbackSuggestions(trimmedQuery) });
+  }
+}
+
+function safeRound(value) {
+  return Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
+}
+
+async function estimateIngredientWithOpenAi({ ingredientName, amount, unit, suggestionId }) {
+  const normalizedUnit = canonicalizeUnit(unit);
+  const numericAmount = Number(amount);
+  const normalizedName = typeof ingredientName === 'string' ? ingredientName.trim() : '';
+
+  const cacheKey = suggestionId
+    ? `${suggestionId}|${numericAmount}|${normalizedUnit}`
+    : normalizedName
+      ? `${normalizedName.toLowerCase()}|${numericAmount}|${normalizedUnit}`
+      : null;
+
+  const cached = getCachedEstimate(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+    return cacheEstimate(
+      cacheKey,
+      fallbackEstimate({ ingredientName: normalizedName, amount: numericAmount, unit: normalizedUnit })
+    );
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    return cacheEstimate(
+      cacheKey,
+      fallbackEstimate({ ingredientName: normalizedName, amount: numericAmount, unit: normalizedUnit })
+    );
+  }
+
+  try {
+    const result = await callOpenAiForJson({
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a meticulous nutrition scientist. Estimate calories and detailed nutrients for single ingredients and typical grocery items. Use grams for macros, milligrams for minerals (vitamin_a in IU), and respond with zero if unsure.'
+        },
+        {
+          role: 'user',
+          content: `Ingredient: ${normalizedName || 'Unknown ingredient'}\nAmount: ${numericAmount}\nUnit: ${normalizedUnit}\nReturn the nutrient values for this portion.`
+        }
+      ],
+      schema: INGREDIENT_ESTIMATE_SCHEMA,
+      model: OPENAI_NUTRITION_MODEL
+    });
+
+    const estimate = {
+      name: normalizedName || 'Ingredient',
+      amount: numericAmount,
+      unit: normalizedUnit,
+      data_source: 'openai'
+    };
+
+    NUTRIENT_FIELDS.forEach((field) => {
+      estimate[field] = safeRound(Number(result?.[field]));
+    });
+
+    return cacheEstimate(cacheKey, estimate);
+  } catch (error) {
+    console.warn('OpenAI ingredient estimate request failed. Using fallback data.', error);
+    return cacheEstimate(
+      cacheKey,
+      fallbackEstimate({ ingredientName: normalizedName, amount: numericAmount, unit: normalizedUnit })
+    );
+  }
 }
 
 function parseImageDataUrl(dataUrl) {
@@ -383,8 +836,22 @@ function jsonResponse(statusCode, body) {
   };
 }
 
+function resolveSubPath(event) {
+  const rawPath = typeof event?.path === 'string' ? event.path : '';
+
+  if (!rawPath) {
+    return '/';
+  }
+
+  const withoutFunctionPrefix = rawPath.replace(/^\/\.netlify\/functions\/api/, '');
+  const withoutApiPrefix = withoutFunctionPrefix.replace(/^\/api/, '');
+  const normalized = withoutApiPrefix.length > 0 ? withoutApiPrefix : '/';
+
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+}
+
 exports.handler = async function handler(event) {
-  const subPath = event.path.replace(/^\/\.netlify\/functions\/api/, '') || '/';
+  const subPath = resolveSubPath(event);
 
   if (event.httpMethod === 'OPTIONS') {
     return {
@@ -411,6 +878,46 @@ exports.handler = async function handler(event) {
     } catch (error) {
       console.error('Failed to analyze meal image via Netlify function:', error);
       return jsonResponse(500, { error: error.message || 'Failed to analyze the meal image.' });
+    }
+  }
+
+  if (subPath === '/ingredient-suggestions' && event.httpMethod === 'POST') {
+    try {
+      const payload = JSON.parse(event.body || '{}');
+      const { type = 'suggestions' } = payload;
+
+      if (type === 'estimate') {
+        const { ingredientName, amount, unit, suggestionId } = payload;
+
+        if (!ingredientName || typeof ingredientName !== 'string') {
+          return jsonResponse(400, { error: 'ingredientName is required.' });
+        }
+
+        if (!unit) {
+          return jsonResponse(400, { error: 'unit is required.' });
+        }
+
+        const numericAmount = Number(amount);
+        if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+          return jsonResponse(400, { error: 'amount must be a positive number.' });
+        }
+
+        const estimate = await estimateIngredientWithOpenAi({
+          ingredientName,
+          amount: numericAmount,
+          unit,
+          suggestionId
+        });
+
+        return jsonResponse(200, { data: estimate });
+      }
+
+      const { query = '' } = payload;
+      const suggestions = await fetchAiSuggestions(query);
+      return jsonResponse(200, { data: suggestions });
+    } catch (error) {
+      console.error('Failed to provide ingredient suggestions via Netlify function:', error);
+      return jsonResponse(500, { error: error.message || 'Failed to fetch ingredient suggestions.' });
     }
   }
 
