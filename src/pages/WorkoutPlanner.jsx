@@ -1,25 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import MuscleSelector from '@/components/workout/MuscleSelector.jsx';
 import { fetchAllMuscles, generateWorkoutPlanFromMuscles } from '@/api/wger.js';
+import { resolveWgerAssetUrl } from '@/utils/wgerAssets.js';
 
 const BODY_VIEWS = ['front', 'back'];
-const WGER_ASSET_BASE_URL = 'https://wger.de';
-
-function toAbsoluteAssetUrl(url = '') {
-  if (!url) return '';
-
-  if (/^https?:\/\//i.test(url)) {
-    return url;
-  }
-
-  if (url.startsWith('//')) {
-    return `https:${url}`;
-  }
-
-  const normalizedBase = WGER_ASSET_BASE_URL.replace(/\/$/, '');
-  const normalizedPath = url.startsWith('/') ? url : `/${url}`;
-  return `${normalizedBase}${normalizedPath}`;
-}
 
 function formatDescription(name = '') {
   const cleaned = name.replace(/muscle/gi, '').replace(/\s+/g, ' ').trim();
@@ -73,8 +57,8 @@ export default function WorkoutPlanner() {
             if (!id) return null;
 
             const label = record?.name_en || record?.name || `Muscle ${id}`;
-            const highlightUrl = toAbsoluteAssetUrl(record?.image_url_main || record?.image_url_secondary || '');
-            const secondaryUrl = toAbsoluteAssetUrl(record?.image_url_secondary || '');
+            const highlightUrl = resolveWgerAssetUrl(record?.image_url_main || record?.image_url_secondary || '');
+            const secondaryUrl = resolveWgerAssetUrl(record?.image_url_secondary || '');
             const view = record?.is_front ? 'front' : 'back';
 
             return {
