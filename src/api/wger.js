@@ -155,6 +155,9 @@ export async function generateWorkoutPlanFromMuscles(
         selectedExercises.map(async (exercise) => {
           const name = exercise?.name || `Exercise ${exercise?.id || ''}`.trim();
           const animation = findExerciseAnimation(name);
+          const animationMatched = Boolean(animation?.matched);
+          const animationUrl = animationMatched ? animation.src : '';
+          const animationAlt = animationMatched ? animation.alt : `${name} demonstration`;
 
           try {
             const insights = await generateExerciseInsights({
@@ -166,8 +169,9 @@ export async function generateWorkoutPlanFromMuscles(
             return {
               ...exercise,
               name,
-              animationUrl: animation?.src || '',
-              animationAlt: animation?.alt || `${name} demonstration`,
+              animationUrl,
+              animationAlt,
+              animationMeta: animation,
               description: insights.description || exercise.description || '',
               sets: insights.sets,
               reps: insights.reps,
@@ -193,8 +197,9 @@ export async function generateWorkoutPlanFromMuscles(
             return {
               ...exercise,
               name,
-              animationUrl: animation?.src || '',
-              animationAlt: animation?.alt || `${name} demonstration`,
+              animationUrl,
+              animationAlt,
+              animationMeta: animation,
               description: exercise.description || '',
               sets: '',
               reps: '',

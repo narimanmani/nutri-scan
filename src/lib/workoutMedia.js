@@ -83,15 +83,29 @@ const DESCRIPTOR_TOKENS = new Set([
   'high',
 ]);
 
+const FUZZY_SCORE_THRESHOLD = 0.28;
+
 const gifModules = import.meta.glob('../workout/Images/*.{gif,GIF}', {
   eager: true,
   import: 'default',
 });
 
+function stripDiacritics(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  if (typeof value.normalize === 'function') {
+    return value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+  }
+
+  return value;
+}
+
 function normalizeToken(token) {
   if (!token) return '';
 
-  let base = token.toLowerCase();
+  let base = stripDiacritics(token).toLowerCase();
   base = base.replace(/[^a-z0-9]/g, '');
   if (!base) {
     return '';
@@ -136,7 +150,7 @@ function tokenize(value, { omitDescriptors = false } = {}) {
 
 function normalizeKey(value) {
   if (typeof value !== 'string') return '';
-  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return stripDiacritics(value).toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 function tokensToKey(tokens) {
@@ -259,11 +273,81 @@ const animationIndex = Object.entries(gifModules)
   })
   .filter(Boolean);
 
-function buildResult(entry) {
-  if (!entry) return null;
+function formatScore(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return 0;
+  }
+  return Number(value);
+}
+
+function createQuerySummary({
+  name,
+  normalizedName,
+  tokens,
+  coreTokens,
+  wantsSide,
+  wantsBack,
+  wantsFront,
+}) {
   return {
+    requestedName: name || '',
+    normalized: normalizedName || '',
+    tokens: Array.isArray(tokens) ? tokens : [],
+    coreTokens: Array.isArray(coreTokens) ? coreTokens : [],
+    wantsSide: Boolean(wantsSide),
+    wantsBack: Boolean(wantsBack),
+    wantsFront: Boolean(wantsFront),
+  };
+}
+
+function createSuggestion(entry, score) {
+  if (!entry) {
+    return null;
+  }
+
+  return {
+    fileName: entry.fileName,
+    baseName: entry.baseName,
+    descriptors: entry.descriptors,
+    tokens: entry.coreTokens,
+    score: formatScore(score),
+    src: entry.src,
+  };
+}
+
+function createMatch(entry, { strategy, score, query }) {
+  if (!entry) {
+    return null;
+  }
+
+  return {
+    matched: true,
     src: entry.src,
     alt: `${entry.baseName} demonstration`,
+    strategy: strategy || 'unknown',
+    score: formatScore(score ?? 1),
+    fileName: entry.fileName,
+    baseName: entry.baseName,
+    descriptors: entry.descriptors,
+    tokens: entry.coreTokens,
+    query,
+    suggestion: null,
+  };
+}
+
+function createUnmatched({ reason, query, suggestion, score }) {
+  return {
+    matched: false,
+    src: '',
+    alt: '',
+    strategy: reason || 'unresolved',
+    score: formatScore(score),
+    fileName: '',
+    baseName: '',
+    descriptors: [],
+    tokens: [],
+    query,
+    suggestion: suggestion || null,
   };
 }
 
@@ -342,35 +426,45 @@ function orientationBoost(descriptors, preferences) {
 }
 
 export function findExerciseAnimation(name) {
-  const normalizedName = normalizeKey(name);
-  if (!normalizedName) {
-    return null;
-  }
-
-  const exact = exactMatchIndex.get(normalizedName);
-  if (exact) {
-    return buildResult(exact);
-  }
-
   const nameTokens = tokenize(name);
   const nameCoreTokens = tokenize(name, { omitDescriptors: true });
+  const normalizedName = normalizeKey(name);
 
   const wantsSide = nameTokens.includes('side');
   const wantsBack = nameTokens.includes('back');
   const wantsFront = nameTokens.includes('front');
 
+  const query = createQuerySummary({
+    name,
+    normalizedName,
+    tokens: nameTokens,
+    coreTokens: nameCoreTokens,
+    wantsSide,
+    wantsBack,
+    wantsFront,
+  });
+
+  if (!normalizedName && nameTokens.length === 0) {
+    return createUnmatched({ reason: 'missing-query', query });
+  }
+
   const preferences = { wantsSide, wantsBack, wantsFront };
+
+  const exact = exactMatchIndex.get(normalizedName);
+  if (exact) {
+    return createMatch(exact, { strategy: 'exact', score: 1, query });
+  }
 
   const coreKey = tokensToKey(nameCoreTokens);
   if (coreKey) {
     const coreMatch = chooseBestEntry(coreKeyIndex.get(coreKey), preferences);
     if (coreMatch) {
-      return buildResult(coreMatch);
+      return createMatch(coreMatch, { strategy: 'core-key', score: 0.95, query });
     }
 
     const aliasFallback = chooseBestEntry(aliasKeyIndex.get(coreKey), preferences);
     if (aliasFallback) {
-      return buildResult(aliasFallback);
+      return createMatch(aliasFallback, { strategy: 'core-alias', score: 0.9, query });
     }
   }
 
@@ -378,11 +472,11 @@ export function findExerciseAnimation(name) {
   for (const aliasKey of aliasKeys) {
     const coreAlias = chooseBestEntry(coreKeyIndex.get(aliasKey), preferences);
     if (coreAlias) {
-      return buildResult(coreAlias);
+      return createMatch(coreAlias, { strategy: 'alias-core', score: 0.85, query });
     }
     const looseAlias = chooseBestEntry(aliasKeyIndex.get(aliasKey), preferences);
     if (looseAlias) {
-      return buildResult(looseAlias);
+      return createMatch(looseAlias, { strategy: 'alias', score: 0.8, query });
     }
   }
 
@@ -403,7 +497,7 @@ export function findExerciseAnimation(name) {
     const diceScore = diceCoefficient(nameBigrams, entry.bigrams);
 
     let partialBonus = 0;
-    if (entry.normalized && (entry.normalized.includes(normalizedName) || normalizedName.includes(entry.normalized))) {
+    if (entry.normalized && normalizedName && (entry.normalized.includes(normalizedName) || normalizedName.includes(entry.normalized))) {
       partialBonus += 0.3;
     }
     if (coreKey && entry.coreKey === coreKey) {
@@ -422,11 +516,12 @@ export function findExerciseAnimation(name) {
     }
   }
 
-  if (bestEntry && bestScore >= 0.38) {
-    return buildResult(bestEntry);
+  if (bestEntry && bestScore >= FUZZY_SCORE_THRESHOLD) {
+    return createMatch(bestEntry, { strategy: 'fuzzy', score: bestScore, query });
   }
 
-  return null;
+  const suggestion = createSuggestion(bestEntry, bestScore);
+  return createUnmatched({ reason: 'no-match', query, suggestion, score: bestScore });
 }
 
 export function listAvailableWorkoutAnimations() {
