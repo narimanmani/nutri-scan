@@ -1,4 +1,5 @@
 import { generateExerciseInsights, generateSectionOverview } from '@/api/openai.js';
+import { findExerciseAnimation } from '@/lib/workoutMedia.js';
 
 const BASE_URL = 'https://wger.de/api/v2';
 const BASE_HOST = BASE_URL.replace(/\/?api\/v2\/?$/, '');
@@ -106,6 +107,167 @@ function extractPhotoUrls(exercise) {
   return Array.from(urls);
 }
 
+const PLACEHOLDER_EXERCISE_NAME = /^exercise\s*\d*$/i;
+
+function cleanExerciseName(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function isMeaningfulExerciseName(name) {
+  const cleaned = cleanExerciseName(name);
+  if (!cleaned) {
+    return false;
+  }
+
+  if (PLACEHOLDER_EXERCISE_NAME.test(cleaned)) {
+    return false;
+  }
+
+  const hasLetter = /[a-z]/i.test(cleaned) || /\p{L}/u.test(cleaned);
+  if (!hasLetter) {
+    return false;
+  }
+
+  return true;
+}
+
+function appendNameCandidate(list, value) {
+  if (!value) return;
+
+  if (typeof value === 'string') {
+    const cleaned = cleanExerciseName(value);
+    if (cleaned) {
+      list.push(cleaned);
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((entry) => appendNameCandidate(list, entry));
+    return;
+  }
+
+  if (typeof value === 'object') {
+    const candidateKeys = ['text', 'name', 'full_name', 'en', 'english', 'value', 'label'];
+    let appended = false;
+
+    for (const key of candidateKeys) {
+      if (typeof value[key] === 'string') {
+        appendNameCandidate(list, value[key]);
+        appended = true;
+      }
+    }
+
+    if (!appended) {
+      Object.values(value).forEach((entry) => appendNameCandidate(list, entry));
+    }
+  }
+}
+
+function dedupeNames(names) {
+  const seen = new Set();
+  const unique = [];
+
+  for (const name of names) {
+    const cleaned = cleanExerciseName(name);
+    if (!cleaned) continue;
+
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(cleaned);
+  }
+
+  return unique;
+}
+
+function gatherExerciseNameCandidates(exercise) {
+  const candidates = [];
+
+  appendNameCandidate(candidates, exercise?.name);
+  appendNameCandidate(candidates, exercise?.name_en);
+  appendNameCandidate(candidates, exercise?.name_original);
+  appendNameCandidate(candidates, exercise?.alias);
+  appendNameCandidate(candidates, exercise?.aliases);
+
+  const translations = exercise?.name_translations;
+  if (translations) {
+    appendNameCandidate(candidates, translations);
+  }
+
+  return dedupeNames(candidates);
+}
+
+function chooseDisplayName(candidates, fallbackId) {
+  for (const candidate of candidates) {
+    if (isMeaningfulExerciseName(candidate)) {
+      return cleanExerciseName(candidate);
+    }
+  }
+
+  if (fallbackId) {
+    return `Exercise ${fallbackId}`;
+  }
+
+  return 'Exercise';
+}
+
+function resolveExercisePresentation(exercise) {
+  const id = exercise?.id;
+  const candidates = gatherExerciseNameCandidates(exercise);
+
+  if (id) {
+    const fallback = `Exercise ${id}`;
+    if (!candidates.some((candidate) => candidate.toLowerCase() === fallback.toLowerCase())) {
+      candidates.push(fallback);
+    }
+  }
+
+  if (candidates.length === 0) {
+    candidates.push(id ? `Exercise ${id}` : 'Exercise');
+  }
+
+  const displayName = chooseDisplayName(candidates, id);
+
+  let bestResult = null;
+  let bestName = displayName;
+
+  for (const candidate of candidates) {
+    const result = findExerciseAnimation(candidate);
+    if (!result) continue;
+
+    const candidateScore = typeof result.score === 'number' ? result.score : 0;
+    const bestScore = typeof bestResult?.score === 'number' ? bestResult.score : 0;
+    const candidateMatched = Boolean(result.matched);
+    const bestMatched = Boolean(bestResult?.matched);
+
+    if (!bestResult || (candidateMatched && !bestMatched) || (candidateMatched === bestMatched && candidateScore > bestScore)) {
+      bestResult = result;
+      bestName = candidate;
+    }
+
+    if (candidateMatched) {
+      break;
+    }
+  }
+
+  if (!bestResult && displayName) {
+    bestResult = findExerciseAnimation(displayName);
+    bestName = displayName;
+  }
+
+  let finalName = displayName;
+  if (bestResult?.matched && isMeaningfulExerciseName(bestName)) {
+    finalName = cleanExerciseName(bestName);
+  }
+
+  return { name: finalName, animation: bestResult };
+}
+
 export async function generateWorkoutPlanFromMuscles(
   muscles,
   { exercisesPerMuscle = 3, signal } = {}
@@ -152,7 +314,12 @@ export async function generateWorkoutPlanFromMuscles(
 
       const enrichedExercises = await Promise.all(
         selectedExercises.map(async (exercise) => {
-          const name = exercise?.name || `Exercise ${exercise?.id || ''}`.trim();
+          const { name: resolvedName, animation } = resolveExercisePresentation(exercise);
+          const name = cleanExerciseName(resolvedName) || `Exercise ${exercise?.id || ''}`.trim();
+          const animationMeta = animation || null;
+          const animationMatched = Boolean(animationMeta?.matched);
+          const animationUrl = animationMatched ? animationMeta.src : '';
+          const animationAlt = animationMatched ? animationMeta.alt : `${name} demonstration`;
 
           try {
             const insights = await generateExerciseInsights({
@@ -164,6 +331,9 @@ export async function generateWorkoutPlanFromMuscles(
             return {
               ...exercise,
               name,
+              animationUrl,
+              animationAlt,
+              animationMeta: animationMeta,
               description: insights.description || exercise.description || '',
               sets: insights.sets,
               reps: insights.reps,
@@ -189,6 +359,9 @@ export async function generateWorkoutPlanFromMuscles(
             return {
               ...exercise,
               name,
+              animationUrl,
+              animationAlt,
+              animationMeta: animationMeta,
               description: exercise.description || '',
               sets: '',
               reps: '',

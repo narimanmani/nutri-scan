@@ -48,6 +48,105 @@ function sanitizeList(list) {
   return list.map((item) => sanitizeText(item)).filter(Boolean);
 }
 
+function ExerciseAnimationPreview({ animationUrl, animationAlt, animationMeta }) {
+  const [failed, setFailed] = useState(false);
+
+  const hasMedia = Boolean(animationUrl) && !failed;
+  const meta = animationMeta || {};
+  const query = meta.query || {};
+  const suggestion = meta.suggestion;
+  const matched = Boolean(meta.matched);
+  const strategy = meta.strategy;
+  const score = typeof meta.score === 'number' && !Number.isNaN(meta.score) ? meta.score : null;
+  const matchedTokens = Array.isArray(meta.tokens) ? meta.tokens : [];
+  const descriptors = Array.isArray(meta.descriptors) ? meta.descriptors : [];
+  const queryTokens = Array.isArray(query.tokens) ? query.tokens : [];
+  const queryCoreTokens = Array.isArray(query.coreTokens) ? query.coreTokens : [];
+
+  if (hasMedia) {
+    return (
+      <div className="mt-3 overflow-hidden rounded-2xl border border-emerald-100 bg-white/80">
+        <img
+          src={animationUrl}
+          alt={animationAlt || 'Exercise demonstration'}
+          loading="lazy"
+          className="h-auto w-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      </div>
+    );
+  }
+
+  const suggestionTokens = Array.isArray(suggestion?.tokens) ? suggestion.tokens : [];
+
+  return (
+    <div className="mt-3 space-y-1.5 rounded-2xl border border-dashed border-emerald-200 bg-white/70 p-4 text-[11px] text-emerald-700">
+      <p className="font-semibold uppercase tracking-[0.2em] text-emerald-500">Animation unavailable</p>
+      <p className="text-emerald-900">
+        {matched
+          ? 'A local GIF was matched but failed to render. Check the asset bundling or file path.'
+          : 'No matching local GIF was located for this exercise name.'}
+      </p>
+      {query.requestedName && (
+        <p>
+          Exercise: <span className="font-medium text-emerald-900">{query.requestedName}</span>
+        </p>
+      )}
+      {strategy && (
+        <p>
+          Strategy: <span className="font-medium text-emerald-900">{strategy}</span>
+        </p>
+      )}
+      {typeof score === 'number' && score > 0 && (
+        <p>
+          Match score: <span className="font-medium text-emerald-900">{score.toFixed(3)}</span>
+        </p>
+      )}
+      {queryTokens.length > 0 && (
+        <p>
+          Query tokens: <span className="font-mono text-emerald-800">{queryTokens.join(', ')}</span>
+        </p>
+      )}
+      {queryCoreTokens.length > 0 && (
+        <p>
+          Core tokens: <span className="font-mono text-emerald-800">{queryCoreTokens.join(', ')}</span>
+        </p>
+      )}
+      {matched && meta.fileName && (
+        <p>
+          Resolved file: <span className="font-mono text-emerald-800">{meta.fileName}</span>
+        </p>
+      )}
+      {matchedTokens.length > 0 && (
+        <p>
+          Matched tokens: <span className="font-mono text-emerald-800">{matchedTokens.join(', ')}</span>
+        </p>
+      )}
+      {descriptors.length > 0 && (
+        <p>
+          Descriptors: <span className="font-mono text-emerald-800">{descriptors.join(', ')}</span>
+        </p>
+      )}
+      {!matched && suggestion && (
+        <div className="mt-2 space-y-1 rounded-xl border border-emerald-200/60 bg-emerald-50/60 p-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-500">Closest candidate</p>
+          <p className="font-mono text-xs text-emerald-900">{suggestion.fileName}</p>
+          {suggestionTokens.length > 0 && (
+            <p>
+              Tokens: <span className="font-mono text-emerald-800">{suggestionTokens.join(', ')}</span>
+            </p>
+          )}
+          {typeof suggestion.score === 'number' && suggestion.score > 0 && (
+            <p>
+              Score: <span className="font-medium text-emerald-900">{suggestion.score.toFixed(3)}</span>
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function WorkoutPlanner() {
   const [view, setView] = useState('front');
   const [catalog, setCatalog] = useState({ status: 'idle', muscles: [], error: '' });
@@ -323,7 +422,7 @@ export default function WorkoutPlanner() {
                     {section.error}
                   </p>
                 ) : (
-                  <ol className="space-y-4 text-sm text-emerald-900/80">
+                  <div className="space-y-4 text-sm text-emerald-900/80" role="list">
                     {section.exercises.map((exercise) => {
                       const descriptionText = sanitizeHtml(exercise.description);
                       const prescriptionDetails = [
@@ -344,12 +443,18 @@ export default function WorkoutPlanner() {
                       const hasPhotos = photoUrls.length > 0;
 
                       return (
-                        <li
+                        <div
                           key={exercise.id}
+                          role="listitem"
                           className="space-y-3 rounded-2xl border border-emerald-100/80 bg-emerald-50/60 px-4 py-3 shadow-sm"
                         >
                           <div>
                             <p className="font-semibold text-emerald-900">{exercise.name}</p>
+                            <ExerciseAnimationPreview
+                              animationUrl={exercise.animationUrl}
+                              animationAlt={exercise.animationAlt || `${exercise.name} demonstration`}
+                              animationMeta={exercise.animationMeta}
+                            />
                             {descriptionText ? (
                               <p className="mt-1 text-xs leading-relaxed text-emerald-800/80">{descriptionText}</p>
                             ) : (
@@ -427,10 +532,10 @@ export default function WorkoutPlanner() {
                               </ul>
                             </div>
                           )}
-                        </li>
+                        </div>
                       );
                     })}
-                  </ol>
+                  </div>
                 )}
               </article>
             );
