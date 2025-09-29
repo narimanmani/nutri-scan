@@ -6,6 +6,84 @@ const BASE_HOST = BASE_URL.replace(/\/?api\/v2\/?$/, '');
 const rawApiKey = import.meta.env?.VITE_WGER_API_KEY;
 const API_KEY = typeof rawApiKey === 'string' ? rawApiKey.trim() : '';
 
+const MUSCLE_LIBRARY_MATCHERS = [
+  {
+    key: 'glutes',
+    patterns: [/glute/i, /gluteus/i],
+  },
+  {
+    key: 'lats',
+    patterns: [/latissimus/i, /\blats?\b/i],
+  },
+];
+
+export const MUSCLE_ID_TO_LIBRARY_KEY = new Map();
+
+function detectLibraryKey(record) {
+  if (!record) {
+    return '';
+  }
+
+  const id = Number(record.id);
+  if (!Number.isFinite(id)) {
+    return '';
+  }
+
+  const existing = MUSCLE_ID_TO_LIBRARY_KEY.get(id);
+  if (existing) {
+    return existing;
+  }
+
+  const nameParts = [record.name_en, record.name, record.name_de, record.alternative_names]
+    .filter((value) => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+
+  if (!nameParts) {
+    return '';
+  }
+
+  for (const matcher of MUSCLE_LIBRARY_MATCHERS) {
+    if (matcher.patterns.some((pattern) => pattern.test(nameParts))) {
+      return matcher.key;
+    }
+  }
+
+  return '';
+}
+
+function buildLibraryMappings(records) {
+  const idToKey = new Map(MUSCLE_ID_TO_LIBRARY_KEY);
+  const keyToIds = new Map();
+
+  for (const record of records) {
+    if (!record) continue;
+
+    const id = Number(record.id);
+    if (!Number.isFinite(id)) {
+      continue;
+    }
+
+    const libraryKey = idToKey.get(id) || detectLibraryKey(record);
+    if (!libraryKey) {
+      continue;
+    }
+
+    idToKey.set(id, libraryKey);
+
+    if (!keyToIds.has(libraryKey)) {
+      keyToIds.set(libraryKey, new Set());
+    }
+    keyToIds.get(libraryKey).add(id);
+  }
+
+  const normalizedKeyToIds = new Map(
+    Array.from(keyToIds.entries()).map(([key, ids]) => [key, Array.from(ids).sort((a, b) => a - b)])
+  );
+
+  return { idToKey, keyToIds: normalizedKeyToIds };
+}
+
 function buildHeaders(extra) {
   const headers = {
     Accept: 'application/json',
@@ -264,5 +342,30 @@ export async function fetchAllMuscles({ signal } = {}) {
     nextUrl = data.next;
   }
 
-  return muscles;
+  const { idToKey, keyToIds } = buildLibraryMappings(muscles);
+
+  MUSCLE_ID_TO_LIBRARY_KEY.clear();
+  for (const [id, libraryKey] of idToKey.entries()) {
+    MUSCLE_ID_TO_LIBRARY_KEY.set(id, libraryKey);
+  }
+
+  return muscles.map((record) => {
+    if (!record) {
+      return record;
+    }
+
+    const id = Number(record.id);
+    if (!Number.isFinite(id)) {
+      return { ...record, libraryKey: '', libraryIds: [] };
+    }
+
+    const libraryKey = idToKey.get(id) || '';
+    const ids = libraryKey ? keyToIds.get(libraryKey) || [id] : [id];
+
+    return {
+      ...record,
+      libraryKey,
+      libraryIds: ids,
+    };
+  });
 }
