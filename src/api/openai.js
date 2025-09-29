@@ -105,6 +105,9 @@ export async function generateExerciseInsights({
   muscleLabel,
   experienceLevel = 'intermediate',
   availableEquipment = 'basic gym setup',
+  instructions = [],
+  difficulty,
+  additionalNotes = [],
   signal,
 }) {
   if (!exerciseName) {
@@ -112,6 +115,33 @@ export async function generateExerciseInsights({
   }
 
   const safeMuscle = normalizeString(muscleLabel);
+  const normalizedDifficulty = normalizeString(difficulty);
+  const normalizedInstructions = Array.isArray(instructions)
+    ? instructions.map((step) => normalizeString(step)).filter(Boolean)
+    : [];
+  const normalizedNotes = Array.isArray(additionalNotes)
+    ? additionalNotes.map((note) => normalizeString(note)).filter(Boolean)
+    : [];
+
+  const referenceLines = [];
+
+  if (normalizedDifficulty) {
+    referenceLines.push(`Difficulty: ${normalizedDifficulty}.`);
+  }
+
+  if (normalizedInstructions.length > 0) {
+    const steps = normalizedInstructions.map((step, index) => `${index + 1}. ${step}`).join('\n');
+    referenceLines.push(`Steps to reference:\n${steps}`);
+  }
+
+  if (normalizedNotes.length > 0) {
+    referenceLines.push(`Additional context: ${normalizedNotes.join(' ')}`);
+  }
+
+  const referenceText =
+    referenceLines.length > 0
+      ? `\n\nReference details from our exercise library:\n${referenceLines.join('\n')}`
+      : '';
 
   const result = await callOpenAI(
     [
@@ -122,7 +152,9 @@ export async function generateExerciseInsights({
       },
       {
         role: 'user',
-        content: `Provide detailed coaching notes for the exercise "${exerciseName}". Assume the trainee has an ${experienceLevel} experience level and access to ${availableEquipment}. If known, emphasize the ${safeMuscle || 'target muscle group'}. Return JSON with the following keys: description (string), recommended_sets (string), recommended_reps (string), tempo (string), rest (string), equipment (string), cues (array of strings), benefits (array of strings), video_urls (array of urls), safety_notes (string). If you are not sure about a field, provide your best professional recommendation.`,
+        content: `Provide detailed coaching notes for the exercise "${exerciseName}". Assume the trainee has an ${experienceLevel} experience level and access to ${availableEquipment}. Focus on the ${
+          safeMuscle || 'target muscle group'
+        }. Use the reference material when crafting your guidance.${referenceText}\n\nRespond in JSON with the following keys: description (string), recommended_sets (string), recommended_reps (string), tempo (string), rest (string), equipment (string), cues (array of strings), benefits (array of strings), video_urls (array of urls), safety_notes (string). Ensure the cues and benefits are practical and rooted in the reference information.`,
       },
     ],
     { signal }

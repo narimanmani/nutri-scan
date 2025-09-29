@@ -6,6 +6,139 @@ const BASE_HOST = BASE_URL.replace(/\/?api\/v2\/?$/, '');
 const rawApiKey = import.meta.env?.VITE_WGER_API_KEY;
 const API_KEY = typeof rawApiKey === 'string' ? rawApiKey.trim() : '';
 
+const WORKOUT_PAGE_MODULES = import.meta.glob('@/workout/*.html', {
+  eager: true,
+  query: '?raw',
+  import: 'default',
+});
+const WORKOUT_IMAGE_MODULES = import.meta.glob('@/workout/Images/*', { eager: true, import: 'default' });
+
+const WORKOUT_IMAGE_BY_FILENAME = Object.entries(WORKOUT_IMAGE_MODULES).reduce((acc, [path, url]) => {
+  const fileName = path.split('/').pop();
+  if (fileName) {
+    acc[fileName.toLowerCase()] = url;
+  }
+  return acc;
+}, {});
+
+const FILE_KEY_OVERRIDES = {
+  lowerback: 'lower-back',
+};
+
+const MANUAL_MUSCLE_SYNONYMS = {
+  abdominals: ['abs', 'rectus abdominis', 'core', 'stomach', 'six pack'],
+  biceps: ['biceps', 'biceps brachii', 'brachialis', 'upper arm flexors'],
+  calves: ['calves', 'calf', 'gastrocnemius', 'soleus', 'tibialis anterior', 'lower leg', 'shin'],
+  chest: ['chest', 'pectoralis', 'pectoralis major', 'pecs', 'upper chest', 'lower chest'],
+  forearms: ['forearms', 'brachioradialis', 'forearm flexors', 'forearm extensors'],
+  glutes: [
+    'glutes',
+    'gluteus maximus',
+    'gluteus medius',
+    'gluteus minimus',
+    'hips',
+    'abductors',
+    'hip abductors',
+    'butt',
+    'buttocks',
+  ],
+  hamstrings: ['hamstrings', 'biceps femoris', 'semitendinosus', 'semimembranosus', 'posterior chain'],
+  lats: ['lats', 'latissimus dorsi', 'back width'],
+  'lower-back': ['lower back', 'erector spinae', 'lumbar', 'spinal erectors'],
+  obliques: [
+    'obliques',
+    'external oblique',
+    'internal oblique',
+    'side abs',
+    'obliquus externus abdominis',
+    'serratus',
+    'serratus anterior',
+  ],
+  quads: [
+    'quadriceps',
+    'quads',
+    'quadriceps femoris',
+    'vastus lateralis',
+    'vastus medialis',
+    'rectus femoris',
+    'vastus intermedius',
+    'adductors',
+    'hip adductors',
+    'inner thigh',
+  ],
+  shoulder: [
+    'shoulders',
+    'shoulder',
+    'deltoid',
+    'anterior deltoid',
+    'lateral deltoid',
+    'middle deltoid',
+    'posterior deltoid',
+    'rear delts',
+    'front delts',
+  ],
+  traps: ['trapezius', 'upper trapezius', 'upper traps', 'traps'],
+  'traps-mid-back': [
+    'middle trapezius',
+    'trapezius middle',
+    'mid traps',
+    'trapezius (middle)',
+    'rhomboids',
+    'rhomboid major',
+    'rhomboid minor',
+  ],
+  triceps: ['triceps', 'triceps brachii'],
+};
+
+function buildMuscleSearchValues(muscle) {
+  const values = [muscle?.libraryKey, muscle?.label, muscle?.name, muscle?.normalizedLabel];
+  if (Array.isArray(muscle?.synonyms)) {
+    values.push(...muscle.synonyms);
+  }
+  const normalized = values
+    .map((value) => normalizeLabel(typeof value === 'string' ? value : ''))
+    .filter(Boolean);
+  return Array.from(new Set(normalized));
+}
+
+function entryMatchesSearch(entry, searchValues) {
+  if (!entry || !Array.isArray(searchValues) || searchValues.length === 0) {
+    return false;
+  }
+
+  if (searchValues.includes(entry.normalizedLabel)) {
+    return true;
+  }
+
+  return entry.normalizedSynonyms.some((synonym) => searchValues.includes(synonym));
+}
+
+const MUSCLE_ID_TO_LIBRARY_KEY = {
+  1: 'biceps',
+  2: 'shoulder',
+  3: 'shoulder',
+  4: 'shoulder',
+  5: 'triceps',
+  6: 'hamstrings',
+  7: 'calves',
+  8: 'glutes',
+  9: 'lats',
+  10: 'chest',
+  11: 'abdominals',
+  12: 'obliques',
+  13: 'calves',
+  14: 'calves',
+  15: 'traps',
+  16: 'quads',
+  17: 'forearms',
+  18: 'obliques',
+  19: 'lower-back',
+  20: 'quads',
+  21: 'glutes',
+  22: 'glutes',
+  23: 'traps-mid-back',
+};
+
 function buildHeaders(extra) {
   const headers = {
     Accept: 'application/json',
@@ -35,22 +168,6 @@ async function fetchJson(url, options = {}) {
   return response.json();
 }
 
-export async function fetchExercisesForMuscle(muscleId, { limit = 20, signal } = {}) {
-  if (!muscleId) {
-    throw new Error('A muscle id is required to fetch exercises.');
-  }
-
-  const searchParams = new URLSearchParams({
-    language: '2',
-    status: '2',
-    muscles: String(muscleId),
-    limit: String(limit),
-  });
-
-  const data = await fetchJson(`${BASE_URL}/exercise/?${searchParams.toString()}`, { signal });
-  return data.results || [];
-}
-
 function toAbsoluteAssetUrl(url = '') {
   if (!url) return '';
 
@@ -67,43 +184,204 @@ function toAbsoluteAssetUrl(url = '') {
   return `${normalizedBase}${normalizedPath}`;
 }
 
-function extractPhotoUrls(exercise) {
-  const urls = new Set();
+function slugify(value = '') {
+  return value
+    .toLowerCase()
+    .replace(/['"]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
 
-  const appendUrl = (value) => {
-    const normalized = toAbsoluteAssetUrl(value);
-    if (normalized) {
-      urls.add(normalized);
+function normalizeLabel(value = '') {
+  return value
+    .toLowerCase()
+    .replace(/['"]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cleanText(value = '') {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function resolveImageUrl(src) {
+  if (!src) return '';
+
+  const rawPath = String(src).split('\\').join('/');
+  const normalizedPath = cleanText(rawPath).replace(/^\.\/?/, '');
+  const fileName = normalizedPath.split('/').pop();
+  if (!fileName) {
+    return '';
+  }
+
+  return WORKOUT_IMAGE_BY_FILENAME[fileName.toLowerCase()] || '';
+}
+
+function parseExerciseSection(headingEl, muscleKey, index) {
+  if (!headingEl) return null;
+
+  const container = headingEl.closest('.container') || headingEl.parentElement;
+  if (!container) return null;
+
+  const title = cleanText(headingEl.textContent || '');
+  if (!title) return null;
+
+  const paragraphs = Array.from(container.querySelectorAll('p'))
+    .map((p) => cleanText(p.textContent || ''))
+    .filter(Boolean);
+
+  let difficulty = '';
+  const notes = [];
+
+  for (const paragraph of paragraphs) {
+    const match = paragraph.match(/difficulty\s*:\s*(.+)$/i);
+    if (match && !difficulty) {
+      difficulty = cleanText(match[1]);
+    } else if (paragraph && !/^difficulty\s*:/i.test(paragraph)) {
+      notes.push(paragraph);
     }
+  }
+
+  const instructions = Array.from(container.querySelectorAll('ol li'))
+    .map((li) => cleanText(li.textContent || ''))
+    .filter(Boolean);
+
+  if (instructions.length === 0) {
+    return null;
+  }
+
+  const media = Array.from(
+    new Set(
+      Array.from(container.querySelectorAll('img'))
+        .map((img) => resolveImageUrl(img.getAttribute('src')))
+        .filter(Boolean)
+    )
+  );
+
+  const slug = slugify(title) || `exercise-${index + 1}`;
+  const id = `${muscleKey}-${slug}`;
+
+  return {
+    id,
+    slug,
+    name: title,
+    difficulty,
+    instructions,
+    notes,
+    media,
+    baseDescription: instructions.join(' '),
   };
+}
 
-  if (typeof exercise?.image === 'string') {
-    appendUrl(exercise.image);
+function parseWorkoutPage(filePath, html) {
+  if (!html) return null;
+  if (typeof DOMParser === 'undefined') {
+    return null;
   }
 
-  const images = exercise?.images;
-  if (Array.isArray(images)) {
-    images.forEach((entry) => {
-      if (!entry) return;
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
 
-      if (typeof entry === 'string') {
-        appendUrl(entry);
-        return;
-      }
+  const muscleHeading = doc.querySelector('h1');
+  const headingText = cleanText(muscleHeading?.textContent || '');
 
-      if (typeof entry === 'object') {
-        if (typeof entry.image === 'string') {
-          appendUrl(entry.image);
-        } else if (typeof entry.image_url === 'string') {
-          appendUrl(entry.image_url);
-        } else if (typeof entry.url === 'string') {
-          appendUrl(entry.url);
-        }
-      }
-    });
+  const baseName = filePath.split('/').pop()?.replace(/\.html$/i, '') || headingText || 'muscle';
+  const normalizedBaseName = baseName.toLowerCase();
+  const keyOverride = FILE_KEY_OVERRIDES[normalizedBaseName];
+  const key = keyOverride || slugify(headingText || baseName);
+  const normalizedLabel = normalizeLabel(headingText || baseName);
+
+  const manualSynonyms = MANUAL_MUSCLE_SYNONYMS[key] || [];
+  const normalizedSynonyms = Array.from(
+    new Set(
+      [normalizedLabel, normalizeLabel(baseName), ...manualSynonyms.map((syn) => normalizeLabel(syn))].filter(Boolean)
+    )
+  );
+
+  const exercises = [];
+  const headings = Array.from(doc.querySelectorAll('h2'));
+  headings.forEach((headingEl, index) => {
+    const exercise = parseExerciseSection(headingEl, key, index);
+    if (exercise) {
+      exercises.push(exercise);
+    }
+  });
+
+  if (exercises.length === 0) {
+    return null;
   }
 
-  return Array.from(urls);
+  return {
+    key,
+    label: headingText || baseName,
+    normalizedLabel,
+    normalizedSynonyms,
+    exercises,
+  };
+}
+
+let workoutLibraryCache = null;
+
+function getWorkoutLibrary() {
+  if (workoutLibraryCache) {
+    return workoutLibraryCache;
+  }
+
+  if (typeof DOMParser === 'undefined') {
+    return new Map();
+  }
+
+  const library = new Map();
+  Object.entries(WORKOUT_PAGE_MODULES).forEach(([path, html]) => {
+    const entry = parseWorkoutPage(path, html);
+    if (entry) {
+      library.set(entry.key, entry);
+    }
+  });
+
+  workoutLibraryCache = library;
+  return library;
+}
+
+function findLibraryEntryForMuscle(muscle) {
+  const library = getWorkoutLibrary();
+  if (!library || library.size === 0) {
+    return null;
+  }
+
+  const muscleId = muscle?.id;
+  const searchValues = buildMuscleSearchValues(muscle);
+
+  if (muscleId != null) {
+    const mappedKey = MUSCLE_ID_TO_LIBRARY_KEY[muscleId];
+    if (mappedKey && library.has(mappedKey)) {
+      const mappedEntry = library.get(mappedKey);
+      if (searchValues.length === 0 || entryMatchesSearch(mappedEntry, searchValues)) {
+        return mappedEntry;
+      }
+      // If the hard-coded map disagrees with the anatomy label, fall back to fuzzy matching.
+      // This guards against stale WGER IDs pointing at the wrong local page.
+    }
+  }
+
+  const uniqueValues = searchValues;
+
+  for (const entry of library.values()) {
+    if (entryMatchesSearch(entry, uniqueValues)) {
+      return entry;
+    }
+  }
+
+  for (const value of uniqueValues) {
+    for (const entry of library.values()) {
+      if (entry.normalizedSynonyms.some((syn) => value.includes(syn) || syn.includes(value))) {
+        return entry;
+      }
+    }
+  }
+
+  return null;
 }
 
 export async function generateWorkoutPlanFromMuscles(
@@ -114,139 +392,140 @@ export async function generateWorkoutPlanFromMuscles(
     return [];
   }
 
+  const library = getWorkoutLibrary();
+  if (!library || library.size === 0) {
+    return muscles.map((muscle) => ({
+      muscle,
+      exercises: [],
+      error: 'The local workout library could not be loaded. Please try again in a supported browser.',
+    }));
+  }
+
   const plan = [];
-  const seenExercises = new Set();
+  const seenExerciseIds = new Set();
 
   for (const muscle of muscles) {
-    try {
-      const targetIds = Array.isArray(muscle.apiIds) && muscle.apiIds.length > 0 ? muscle.apiIds : [muscle.id];
-      const muscleExercises = [];
+    const libraryEntry = findLibraryEntryForMuscle(muscle);
 
-      for (const targetId of targetIds) {
-        if (!targetId) continue;
-        const exercises = await fetchExercisesForMuscle(targetId, {
-          limit: exercisesPerMuscle * 3,
-          signal,
-        });
-        muscleExercises.push(...exercises);
-      }
-
-      if (muscleExercises.length === 0) {
-        plan.push({
-          muscle,
-          exercises: [],
-          error: 'No exercises found for this muscle group.',
-        });
-        continue;
-      }
-
-      const uniqueExercises = muscleExercises.filter((exercise) => {
-        if (seenExercises.has(exercise.id)) {
-          return false;
-        }
-        seenExercises.add(exercise.id);
-        return true;
-      });
-
-      const selectedExercises = uniqueExercises.slice(0, exercisesPerMuscle);
-
-      const enrichedExercises = await Promise.all(
-        selectedExercises.map(async (exercise) => {
-          const name = exercise?.name || `Exercise ${exercise?.id || ''}`.trim();
-
-          try {
-            const insights = await generateExerciseInsights({
-              exerciseName: name,
-              muscleLabel: muscle.label,
-              signal,
-            });
-
-            return {
-              ...exercise,
-              name,
-              description: insights.description || exercise.description || '',
-              sets: insights.sets,
-              reps: insights.reps,
-              tempo: insights.tempo,
-              rest: insights.rest,
-              equipment: insights.equipment,
-              cues: insights.cues,
-              benefits: insights.benefits,
-              videoUrls: [],
-              photoUrls: extractPhotoUrls(exercise),
-              safetyNotes: insights.safetyNotes,
-            };
-          } catch (detailError) {
-            if (detailError.name === 'AbortError') {
-              throw detailError;
-            }
-
-            const errorMessage =
-              detailError.code === 'OPENAI_API_KEY_MISSING'
-                ? 'Configure an OpenAI API key to generate AI coaching notes.'
-                : detailError.message || 'Unable to load coaching notes for this exercise.';
-
-            return {
-              ...exercise,
-              name,
-              description: exercise.description || '',
-              sets: '',
-              reps: '',
-              tempo: '',
-              rest: '',
-              equipment: '',
-              cues: [],
-              benefits: [],
-              videoUrls: [],
-              photoUrls: extractPhotoUrls(exercise),
-              safetyNotes: '',
-              detailError: errorMessage,
-            };
-          }
-        })
-      );
-
-      let overview = { focus: '', adaptationGoal: '', warmupTip: '' };
-      let overviewError = '';
-
-      try {
-        overview = await generateSectionOverview({
-          muscleLabel: muscle.label,
-          exerciseNames: enrichedExercises.map((exercise) => exercise.name),
-          signal,
-        });
-      } catch (overviewErr) {
-        if (overviewErr.name === 'AbortError') {
-          throw overviewErr;
-        }
-
-        overviewError =
-          overviewErr.code === 'OPENAI_API_KEY_MISSING'
-            ? 'Configure an OpenAI API key to summarize this block.'
-            : overviewErr.message || 'Unable to summarize this block right now.';
-      }
-
-      plan.push({
-        muscle,
-        exercises: enrichedExercises,
-        overview,
-        overviewError,
-      });
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        throw error;
-      }
-
-      if (error.code === 'OPENAI_API_KEY_MISSING') {
-        throw new Error('Set VITE_OPENAI_API_KEY to generate workout plans with AI coaching.');
-      }
-
+    if (!libraryEntry) {
       plan.push({
         muscle,
         exercises: [],
-        error: error.message || 'Unable to load exercises',
+        error: 'No matching exercises were found for this muscle in the local library.',
       });
+      continue;
     }
+
+    const availableExercises = libraryEntry.exercises.filter((exercise) => !seenExerciseIds.has(exercise.id));
+
+    if (availableExercises.length === 0) {
+      plan.push({
+        muscle,
+        exercises: [],
+        error: 'No exercises found for this muscle group.',
+      });
+      continue;
+    }
+
+    const selectedExercises =
+      exercisesPerMuscle > 0 ? availableExercises.slice(0, exercisesPerMuscle) : availableExercises;
+
+    selectedExercises.forEach((exercise) => seenExerciseIds.add(exercise.id));
+
+    const enrichedExercises = await Promise.all(
+      selectedExercises.map(async (exercise) => {
+        const fallbackDescription = exercise.baseDescription || exercise.instructions.join(' ');
+        try {
+          const insights = await generateExerciseInsights({
+            exerciseName: exercise.name,
+            muscleLabel: libraryEntry.label || muscle.label,
+            instructions: exercise.instructions,
+            difficulty: exercise.difficulty,
+            additionalNotes: exercise.notes,
+            signal,
+          });
+
+          return {
+            id: exercise.id,
+            name: exercise.name,
+            description: insights.description || fallbackDescription,
+            sets: insights.sets,
+            reps: insights.reps,
+            tempo: insights.tempo,
+            rest: insights.rest,
+            equipment: insights.equipment,
+            cues: insights.cues,
+            benefits: insights.benefits,
+            videoUrls: [],
+            photoUrls: exercise.media,
+            safetyNotes: insights.safetyNotes,
+            difficulty: exercise.difficulty,
+            librarySteps: exercise.instructions,
+            libraryNotes: exercise.notes,
+          };
+        } catch (detailError) {
+          if (detailError.name === 'AbortError') {
+            throw detailError;
+          }
+
+          const errorMessage =
+            detailError.code === 'OPENAI_API_KEY_MISSING'
+              ? 'Configure an OpenAI API key to generate AI coaching notes.'
+              : detailError.message || 'Unable to load coaching notes for this exercise.';
+
+          return {
+            id: exercise.id,
+            name: exercise.name,
+            description: fallbackDescription,
+            sets: '',
+            reps: '',
+            tempo: '',
+            rest: '',
+            equipment: '',
+            cues: [],
+            benefits: [],
+            videoUrls: [],
+            photoUrls: exercise.media,
+            safetyNotes: '',
+            detailError: errorMessage,
+            difficulty: exercise.difficulty,
+            librarySteps: exercise.instructions,
+            libraryNotes: exercise.notes,
+          };
+        }
+      })
+    );
+
+    let overview = { focus: '', adaptationGoal: '', warmupTip: '' };
+    let overviewError = '';
+
+    try {
+      overview = await generateSectionOverview({
+        muscleLabel: libraryEntry.label || muscle.label,
+        exerciseNames: enrichedExercises.map((exercise) => exercise.name),
+        signal,
+      });
+    } catch (overviewErr) {
+      if (overviewErr.name === 'AbortError') {
+        throw overviewErr;
+      }
+
+      overviewError =
+        overviewErr.code === 'OPENAI_API_KEY_MISSING'
+          ? 'Configure an OpenAI API key to summarize this block.'
+          : overviewErr.message || 'Unable to summarize this block right now.';
+    }
+
+    plan.push({
+      muscle: {
+        ...muscle,
+        matchedLibraryKey: libraryEntry.key,
+        matchedLibraryLabel: libraryEntry.label,
+      },
+      exercises: enrichedExercises,
+      overview,
+      overviewError,
+    });
   }
 
   return plan.filter((section) => section.exercises.length > 0 || section.error);

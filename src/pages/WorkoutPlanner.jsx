@@ -92,7 +92,10 @@ export default function WorkoutPlanner() {
           .sort((a, b) => a.label.localeCompare(b.label));
 
         setCatalog({ status: 'success', muscles: normalized, error: '' });
-        setSelectedIds((prev) => prev.filter((id) => normalized.some((muscle) => muscle.id === id)));
+        setSelectedIds((prev) => {
+          const normalizedPrev = prev.map((id) => Number(id)).filter((id) => Number.isFinite(id));
+          return normalizedPrev.filter((id) => normalized.some((muscle) => Number(muscle.id) === id));
+        });
       })
       .catch((err) => {
         if (!isActive || err.name === 'AbortError') {
@@ -107,10 +110,19 @@ export default function WorkoutPlanner() {
     };
   }, []);
 
-  const selectedMuscles = useMemo(
-    () => catalog.muscles.filter((muscle) => selectedIds.includes(muscle.id)),
-    [catalog.muscles, selectedIds]
-  );
+  const selectedMuscles = useMemo(() => {
+    if (selectedIds.length === 0 || catalog.muscles.length === 0) {
+      return [];
+    }
+
+    return selectedIds
+      .map((id) => {
+        const numericId = Number(id);
+        if (!Number.isFinite(numericId)) return null;
+        return catalog.muscles.find((muscle) => Number(muscle.id) === numericId) || null;
+      })
+      .filter(Boolean);
+  }, [catalog.muscles, selectedIds]);
 
   useEffect(() => {
     return () => {
@@ -120,9 +132,27 @@ export default function WorkoutPlanner() {
 
   const toggleMuscle = (muscle) => {
     if (!muscle) return;
-    setSelectedIds((prev) =>
-      prev.includes(muscle.id) ? prev.filter((id) => id !== muscle.id) : [...prev, muscle.id]
-    );
+    const muscleId = Number(muscle.id);
+    if (!Number.isFinite(muscleId)) {
+      return;
+    }
+
+    setSelectedIds((prev) => {
+      const normalizedPrev = prev.map((id) => Number(id)).filter((id) => Number.isFinite(id));
+      return normalizedPrev.includes(muscleId)
+        ? normalizedPrev.filter((id) => id !== muscleId)
+        : [...normalizedPrev, muscleId];
+    });
+  };
+
+  const handleResetFocus = () => {
+    setSelectedIds([]);
+    setPlan([]);
+    setError('');
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = undefined;
+    }
   };
 
   const handleGeneratePlan = async () => {
@@ -139,7 +169,20 @@ export default function WorkoutPlanner() {
     abortRef.current = controller;
 
     try {
-      const result = await generateWorkoutPlanFromMuscles(selectedMuscles, {
+      const musclesForPlan = selectedMuscles.map((muscle) => ({
+        ...muscle,
+        id: Number(muscle.id),
+        apiIds: Array.isArray(muscle.apiIds)
+          ? muscle.apiIds.map((value) => Number(value)).filter((value) => Number.isFinite(value))
+          : [Number(muscle.id)].filter((value) => Number.isFinite(value)),
+      }));
+
+      if (musclesForPlan.length === 0) {
+        setError('We could not match your selected focus areas to the workout library. Try choosing the muscles again.');
+        return;
+      }
+
+      const result = await generateWorkoutPlanFromMuscles(musclesForPlan, {
         exercisesPerMuscle: 3,
         signal: controller.signal,
       });
@@ -203,7 +246,18 @@ export default function WorkoutPlanner() {
 
         <div className="flex flex-col gap-6">
           <div className="rounded-3xl border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-emerald-100 p-6 shadow-lg shadow-emerald-100/70">
-            <h2 className="text-xl font-semibold text-emerald-900">Your Focus Areas</h2>
+            <div className="flex items-start justify-between gap-4">
+              <h2 className="text-xl font-semibold text-emerald-900">Your Focus Areas</h2>
+              {selectedMuscles.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleResetFocus}
+                  className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-600 shadow-sm transition hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+                >
+                  Reset
+                </button>
+              )}
+            </div>
             {selectedMuscles.length === 0 ? (
               <p className="mt-3 text-sm text-emerald-800/80">
                 Tap on the anatomy illustration or use the list to highlight the muscles you would like to train today. Selected groups will appear here with quick tips.
@@ -337,11 +391,16 @@ export default function WorkoutPlanner() {
                       const benefits = sanitizeList(exercise.benefits);
                       const photoUrls = sanitizeList(exercise.photoUrls);
                       const safetyNotes = sanitizeText(exercise.safetyNotes);
+                      const difficulty = sanitizeText(exercise.difficulty);
+                      const librarySteps = sanitizeList(exercise.librarySteps);
+                      const libraryNotes = sanitizeList(exercise.libraryNotes);
 
                       const hasPrescription = prescriptionDetails.length > 0;
                       const hasCues = cues.length > 0;
                       const hasBenefits = benefits.length > 0;
                       const hasPhotos = photoUrls.length > 0;
+                      const hasLibrarySteps = librarySteps.length > 0;
+                      const hasLibraryNotes = libraryNotes.length > 0;
 
                       return (
                         <li
@@ -355,6 +414,14 @@ export default function WorkoutPlanner() {
                             ) : (
                               <p className="mt-1 text-xs italic text-emerald-800/60">
                                 Detailed instructions will appear once AI guidance loads for this exercise.
+                              </p>
+                            )}
+                            {difficulty && (
+                              <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.25em] text-emerald-500">
+                                Library difficulty{' '}
+                                <span className="ml-1 font-medium normal-case tracking-normal text-emerald-800/80">
+                                  {difficulty}
+                                </span>
                               </p>
                             )}
                             {exercise.detailError && (
@@ -411,20 +478,58 @@ export default function WorkoutPlanner() {
                             </p>
                           )}
 
-                          {hasPhotos && (
+                          {hasLibrarySteps && (
                             <div>
                               <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-500">
-                                Reference photos
+                                Library steps
                               </p>
-                              <ul className="mt-2 space-y-1 text-xs text-emerald-700 underline decoration-emerald-300 underline-offset-2">
-                                {photoUrls.map((url, index) => (
-                                  <li key={`${exercise.id}-video-${index}`}>
-                                    <a href={url} target="_blank" rel="noopener noreferrer" className="hover:text-emerald-900">
-                                      {`View photo ${index + 1}`}
-                                    </a>
+                              <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs text-emerald-800/80">
+                                {librarySteps.map((step, index) => (
+                                  <li key={`${exercise.id}-library-step-${index}`}>{step}</li>
+                                ))}
+                              </ol>
+                            </div>
+                          )}
+
+                          {hasLibraryNotes && (
+                            <div>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-500">
+                                Library tips
+                              </p>
+                              <ul className="mt-2 space-y-1 text-xs text-emerald-800/75">
+                                {libraryNotes.map((note, index) => (
+                                  <li key={`${exercise.id}-library-note-${index}`} className="flex gap-2">
+                                    <span className="mt-2 h-1.5 w-1.5 flex-none rounded-full bg-emerald-200" aria-hidden="true" />
+                                    <span>{note}</span>
                                   </li>
                                 ))}
                               </ul>
+                            </div>
+                          )}
+
+                          {hasPhotos && (
+                            <div>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-500">
+                                Exercise visuals
+                              </p>
+                              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                {photoUrls.map((url, index) => (
+                                  <a
+                                    key={`${exercise.id}-visual-${index}`}
+                                    href={url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="group relative block overflow-hidden rounded-xl border border-emerald-100 bg-white/70"
+                                  >
+                                    <img
+                                      src={url}
+                                      alt={`${exercise.name} demonstration ${index + 1}`}
+                                      loading="lazy"
+                                      className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.015]"
+                                    />
+                                  </a>
+                                ))}
+                              </div>
                             </div>
                           )}
                         </li>
