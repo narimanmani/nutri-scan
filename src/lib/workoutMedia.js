@@ -18,86 +18,13 @@ const STOP_WORDS = new Set([
   'using',
 ]);
 
-const TOKEN_NORMALIZATIONS = new Map([
-  ['pressup', 'pushup'],
-  ['pressups', 'pushup'],
-  ['pushups', 'pushup'],
-  ['pushup', 'pushup'],
-  ['lunges', 'lunge'],
-  ['crunches', 'crunch'],
-  ['raises', 'raise'],
-  ['extensions', 'extension'],
-  ['curls', 'curl'],
-  ['rows', 'row'],
-  ['squats', 'squat'],
-  ['deadlifts', 'deadlift'],
-  ['hips', 'hip'],
-  ['glutes', 'glute'],
-  ['triceps', 'tricep'],
-  ['biceps', 'bicep'],
-  ['calf', 'calf'],
-  ['calve', 'calf'],
-  ['calves', 'calf'],
-]);
+const DESCRIPTOR_TOKENS = new Set(['front', 'back', 'side']);
 
-const DESCRIPTOR_TOKENS = new Set([
-  'male',
-  'female',
-  'man',
-  'woman',
-  'front',
-  'back',
-  'side',
-  'left',
-  'right',
-  'standing',
-  'seated',
-  'kneeling',
-  'lying',
-  'laying',
-  'prone',
-  'supine',
-  'incline',
-  'decline',
-  'wide',
-  'narrow',
-  'close',
-  'neutral',
-  'overhand',
-  'underhand',
-  'pronated',
-  'supinated',
-  'single',
-  'double',
-  'one',
-  'two',
-  'alternating',
-  'alternate',
-  'variation',
-  'hold',
-  'position',
-  'isometric',
-  'assisted',
-  'unassisted',
-  'supported',
-  'unsupported',
-  'elevated',
-  'low',
-  'high',
-]);
-
-const FUZZY_SCORE_THRESHOLD = 0.28;
-
-const GENERIC_EXERCISE_TOKENS = new Set([
-  'exercise',
-  'exercises',
-  'movement',
-  'movements',
-  'drill',
-  'drills',
-  'workout',
-  'workouts',
-]);
+const htmlModules = import.meta.glob('../workout/*.html', {
+  eager: true,
+  query: '?raw',
+  import: 'default',
+});
 
 const gifModules = import.meta.glob('../workout/Images/*.{gif,GIF}', {
   eager: true,
@@ -118,14 +45,11 @@ function stripDiacritics(value) {
 
 function normalizeToken(token) {
   if (!token) return '';
-
   let base = stripDiacritics(token).toLowerCase();
   base = base.replace(/[^a-z0-9]/g, '');
   if (!base) {
     return '';
   }
-
-  base = base.replace(/'(s)?$/g, '');
 
   if (base.endsWith('ing') && base.length > 4) {
     base = base.slice(0, -3);
@@ -137,13 +61,11 @@ function normalizeToken(token) {
     base = base.slice(0, -1);
   }
 
-  const normalized = TOKEN_NORMALIZATIONS.get(base) || base;
-
-  if (STOP_WORDS.has(normalized)) {
+  if (STOP_WORDS.has(base)) {
     return '';
   }
 
-  return normalized;
+  return base;
 }
 
 function tokenize(value, { omitDescriptors = false } = {}) {
@@ -198,100 +120,106 @@ function diceCoefficient(a, b) {
       overlap += 1;
     }
   }
-
   return (2 * overlap) / (a.length + b.length);
 }
 
-function registerEntry(map, key, entry) {
-  if (!key) return;
-  const existing = map.get(key);
-  if (existing) {
-    if (!existing.includes(entry)) {
-      existing.push(entry);
-    }
-    return;
-  }
-  map.set(key, [entry]);
+function decodeHtmlEntities(value) {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&rsquo;/gi, "'")
+    .replace(/&lsquo;/gi, "'")
+    .replace(/&ldquo;/gi, '"')
+    .replace(/&rdquo;/gi, '"')
+    .replace(/&ndash;/gi, '-')
+    .replace(/&mdash;/gi, '-')
+    .replace(/&hellip;/gi, '...')
+    .replace(/&deg;/gi, '°');
 }
 
-function generateAliasKeys(tokens) {
-  if (!Array.isArray(tokens) || tokens.length === 0) {
-    return [];
-  }
-
-  const keys = new Set();
-
-  if (tokens.length >= 2) {
-    keys.add(tokensToKey(tokens.slice(1)));
-    keys.add(tokensToKey(tokens.slice(0, -1)));
-  }
-
-  if (tokens.length >= 3) {
-    for (let i = 0; i < tokens.length; i += 1) {
-      const subset = tokens.slice(0, i).concat(tokens.slice(i + 1));
-      keys.add(tokensToKey(subset));
-    }
-  }
-
-  return Array.from(keys).filter(Boolean);
+function cleanText(value) {
+  if (typeof value !== 'string') return '';
+  return decodeHtmlEntities(value)
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-const exactMatchIndex = new Map();
-const coreKeyIndex = new Map();
-const aliasKeyIndex = new Map();
+function inferOrientation(fileName = '') {
+  const lower = fileName.toLowerCase();
+  if (lower.includes('front')) return 'front';
+  if (lower.includes('back')) return 'back';
+  if (lower.includes('side')) return 'side';
+  return '';
+}
 
-const animationIndex = Object.entries(gifModules)
-  .map(([path, src]) => {
-    const resolvedSrc = typeof src === 'string' ? src : src?.default;
-    if (!resolvedSrc) {
-      return null;
-    }
-
-    const parts = path.split('/');
-    const fileName = parts[parts.length - 1];
-    const baseName = fileName.replace(/\.[^.]+$/, '');
-
-    const normalized = normalizeKey(baseName);
-    const tokens = tokenize(baseName);
-    const descriptors = Array.from(new Set(tokens.filter((token) => DESCRIPTOR_TOKENS.has(token))));
-    const coreTokens = tokenize(baseName, { omitDescriptors: true });
-    const coreKey = tokensToKey(coreTokens);
-    const aliasKeys = generateAliasKeys(coreTokens);
-    const bigrams = createBigrams(normalized);
-
-    const entry = {
-      path,
-      fileName,
-      baseName,
-      normalized,
-      tokens,
-      descriptors,
-      coreTokens,
-      coreKey,
-      aliasKeys,
-      bigrams,
-      src: resolvedSrc,
-    };
-
-    if (normalized) {
-      exactMatchIndex.set(normalized, entry);
-    }
-
-    if (coreKey) {
-      registerEntry(coreKeyIndex, coreKey, entry);
-    }
-
-    aliasKeys.forEach((aliasKey) => registerEntry(aliasKeyIndex, aliasKey, entry));
-
-    return entry;
-  })
-  .filter(Boolean);
-
-function formatScore(value) {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
-    return 0;
+function choosePrimaryMedia(images) {
+  if (!Array.isArray(images) || images.length === 0) {
+    return null;
   }
-  return Number(value);
+
+  const byPreference = ['front', 'side', 'back'];
+
+  for (const orientation of byPreference) {
+    const match = images.find((image) => image.orientation === orientation);
+    if (match) {
+      return match;
+    }
+  }
+
+  return images[0];
+}
+
+function normalizeImagePath(rawPath = '') {
+  if (!rawPath) return '';
+  const normalized = rawPath.replace(/\\/g, '/').replace(/^\.\/?/, '');
+  const parts = normalized.split('/');
+  const fileName = parts[parts.length - 1];
+  return fileName ? fileName.trim() : '';
+}
+
+function extractExercisesFromHtml(fileName, html) {
+  if (!html) return [];
+
+  const result = [];
+  const sections = [...html.matchAll(/<h2[^>]*>(.*?)<\/h2>([\s\S]*?)(?=<h2[^>]*>|<\/body>)/gi)];
+
+  for (const [, rawTitle, sectionHtml] of sections) {
+    const name = cleanText(rawTitle);
+    if (!name) continue;
+
+    const imageMatches = [...sectionHtml.matchAll(/<img[^>]+src=["']([^"']+)["'][^>]*>/gi)];
+    if (imageMatches.length === 0) continue;
+
+    const images = imageMatches
+      .map(([, srcValue]) => {
+        const fileNameOnly = normalizeImagePath(srcValue);
+        if (!fileNameOnly) return null;
+
+        const keyLower = `../workout/Images/${fileNameOnly}`;
+        const keyUpper = `../workout/Images/${fileNameOnly.replace(/\.gif$/i, '.GIF')}`;
+        const moduleValue = gifModules[keyLower] || gifModules[keyUpper];
+        if (!moduleValue) {
+          return null;
+        }
+
+        return {
+          fileName: fileNameOnly,
+          src: moduleValue,
+          orientation: inferOrientation(fileNameOnly),
+        };
+      })
+      .filter(Boolean);
+
+    if (images.length === 0) continue;
+
+    result.push({ name, images });
+  }
+
+  return result;
 }
 
 function createQuerySummary({
@@ -299,297 +227,236 @@ function createQuerySummary({
   normalizedName,
   tokens,
   coreTokens,
-  wantsSide,
-  wantsBack,
+  bigrams,
   wantsFront,
+  wantsBack,
+  wantsSide,
 }) {
   return {
-    requestedName: name || '',
-    normalized: normalizedName || '',
-    tokens: Array.isArray(tokens) ? tokens : [],
-    coreTokens: Array.isArray(coreTokens) ? coreTokens : [],
-    wantsSide: Boolean(wantsSide),
-    wantsBack: Boolean(wantsBack),
-    wantsFront: Boolean(wantsFront),
+    requestedName: name,
+    normalizedName,
+    tokens,
+    coreTokens,
+    bigrams,
+    wantsFront,
+    wantsBack,
+    wantsSide,
+  };
+}
+
+function createMatch(entry, { strategy, score, query, aliasName }) {
+  const primary = entry.primary;
+  const altOrientation = primary?.orientation ? ` (${primary.orientation})` : '';
+
+  return {
+    matched: Boolean(primary),
+    src: primary?.src || '',
+    alt: primary ? `${entry.name}${altOrientation} demonstration` : `${entry.name} demonstration`,
+    score,
+    strategy,
+    query,
+    tokens: entry.coreTokens,
+    descriptors: entry.descriptors,
+    fileName: primary?.fileName || '',
+    htmlFile: entry.htmlFile,
+    muscle: entry.muscleName,
+    aliasName,
   };
 }
 
 function createSuggestion(entry, score) {
-  if (!entry) {
-    return null;
-  }
-
+  if (!entry) return null;
   return {
-    fileName: entry.fileName,
-    baseName: entry.baseName,
-    descriptors: entry.descriptors,
+    fileName: entry.primary?.fileName || '',
     tokens: entry.coreTokens,
-    score: formatScore(score),
-    src: entry.src,
+    descriptors: entry.descriptors,
+    score,
   };
 }
 
-function createMatch(entry, { strategy, score, query, confidence = 'high', suggestion = null }) {
-  if (!entry) {
-    return null;
-  }
-
-  return {
-    matched: true,
-    src: entry.src,
-    alt: `${entry.baseName} demonstration`,
-    strategy: strategy || 'unknown',
-    score: formatScore(score ?? 1),
-    fileName: entry.fileName,
-    baseName: entry.baseName,
-    descriptors: entry.descriptors,
-    tokens: entry.coreTokens,
-    query,
-    confidence: confidence === 'low' ? 'low' : 'high',
-    suggestion: suggestion && suggestion.fileName ? suggestion : null,
-  };
-}
-
-function createUnmatched({ reason, query, suggestion, score }) {
+function createUnmatched({ query, suggestion, score }) {
   return {
     matched: false,
     src: '',
     alt: '',
-    strategy: reason || 'unresolved',
-    score: formatScore(score),
-    fileName: '',
-    baseName: '',
-    descriptors: [],
-    tokens: [],
+    score,
+    strategy: 'none',
     query,
-    suggestion: suggestion || null,
-    confidence: 'none',
+    suggestion,
   };
 }
 
-const GENERIC_EXERCISE_PATTERN = /^exercise\s*\d*$/i;
+function orientationBonus(entry, query) {
+  const wants = {
+    front: Boolean(query.wantsFront),
+    back: Boolean(query.wantsBack),
+    side: Boolean(query.wantsSide),
+  };
 
-function hasMeaningfulTokens(tokens) {
-  if (!Array.isArray(tokens) || tokens.length === 0) {
-    return false;
+  const descriptors = new Set(entry.descriptors);
+
+  let bonus = 0;
+  if (wants.side) {
+    if (descriptors.has('side')) bonus += 0.2;
+  } else if (wants.back) {
+    if (descriptors.has('back')) bonus += 0.18;
+    if (descriptors.has('front')) bonus -= 0.05;
+  } else if (wants.front) {
+    if (descriptors.has('front')) bonus += 0.18;
+    if (descriptors.has('back')) bonus -= 0.05;
+  } else if (descriptors.has('front')) {
+    bonus += 0.08;
   }
 
-  return tokens.some((token) => {
-    if (!token) return false;
-    if (GENERIC_EXERCISE_TOKENS.has(token)) return false;
-    if (/^\d+$/.test(token)) return false;
-    return true;
-  });
+  return bonus;
 }
 
-function isLowSignalQuery({ name, tokens, coreTokens }) {
-  const normalizedName = typeof name === 'string' ? name.trim() : '';
-  if (!normalizedName) {
-    return true;
-  }
+const exactIndex = new Map();
+const exerciseEntries = [];
 
-  if (GENERIC_EXERCISE_PATTERN.test(normalizedName)) {
-    return true;
-  }
+for (const [path, rawHtml] of Object.entries(htmlModules)) {
+  const fileName = path.split('/').pop();
+  if (!fileName) continue;
 
-  if (hasMeaningfulTokens(coreTokens)) {
-    return false;
-  }
+  const muscleName = cleanText(fileName.replace(/\.html$/i, '').replace(/[-_]/g, ' '));
+  const muscleTokens = tokenize(muscleName, { omitDescriptors: true });
 
-  return !hasMeaningfulTokens(tokens);
-}
+  const exercises = extractExercisesFromHtml(fileName, rawHtml);
+  for (const exercise of exercises) {
+    const name = exercise.name;
+    const normalized = normalizeKey(name);
+    const tokens = tokenize(name);
+    const coreTokens = tokenize(name, { omitDescriptors: true });
+    const descriptors = Array.from(
+      new Set(exercise.images.map((image) => image.orientation).filter(Boolean))
+    );
 
-function chooseBestEntry(candidates, preferences) {
-  if (!Array.isArray(candidates) || candidates.length === 0) {
-    return null;
-  }
+    const entry = {
+      name,
+      normalized,
+      tokens,
+      coreTokens,
+      coreKey: tokensToKey(coreTokens),
+      descriptors,
+      bigrams: createBigrams(normalized),
+      primary: choosePrimaryMedia(exercise.images),
+      htmlFile: fileName,
+      muscleName,
+      muscleTokens,
+    };
 
-  if (candidates.length === 1) {
-    return candidates[0];
-  }
-
-  const wantsSide = Boolean(preferences?.wantsSide);
-  const wantsBack = Boolean(preferences?.wantsBack);
-  const wantsFront = Boolean(preferences?.wantsFront);
-
-  let best = null;
-  let bestScore = -Infinity;
-
-  for (const candidate of candidates) {
-    const descriptorSet = new Set(candidate.descriptors);
-    let score = 0;
-
-    if (wantsSide) {
-      if (descriptorSet.has('side')) score += 3;
-      if (descriptorSet.has('front')) score -= 0.4;
-      if (descriptorSet.has('back')) score -= 0.4;
-    } else if (wantsBack) {
-      if (descriptorSet.has('back')) score += 2.5;
-      if (descriptorSet.has('front')) score -= 0.3;
-    } else if (wantsFront) {
-      if (descriptorSet.has('front')) score += 2.5;
-      if (descriptorSet.has('back')) score -= 0.3;
-    } else {
-      if (descriptorSet.has('front')) score += 1.2;
-      if (descriptorSet.has('side')) score += 0.6;
+    if (!entry.primary) {
+      continue;
     }
 
-    score += 0.4 / (descriptorSet.size + 1);
-    score -= candidate.fileName.length * 0.0005;
+    const aliasNames = new Set([
+      name,
+      `${muscleName} ${name}`,
+      `${name} ${muscleName}`,
+    ]);
 
-    if (score > bestScore) {
-      bestScore = score;
-      best = candidate;
+    for (const alias of aliasNames) {
+      const key = normalizeKey(alias);
+      if (!key || exactIndex.has(key)) continue;
+      exactIndex.set(key, { entry, aliasName: alias });
     }
-  }
 
-  return best;
+    exerciseEntries.push(entry);
+  }
 }
 
-function orientationBoost(descriptors, preferences) {
-  const descriptorSet = new Set(descriptors);
-  const wantsSide = Boolean(preferences?.wantsSide);
-  const wantsBack = Boolean(preferences?.wantsBack);
-  const wantsFront = Boolean(preferences?.wantsFront);
+function evaluateEntry(entry, query) {
+  if (!entry) return 0;
 
-  let boost = 0;
+  const queryTokenSet = new Set(query.tokens);
+  const queryCoreSet = new Set(query.coreTokens);
 
-  if (wantsSide) {
-    if (descriptorSet.has('side')) boost += 0.2;
-  } else if (wantsBack) {
-    if (descriptorSet.has('back')) boost += 0.18;
-    if (descriptorSet.has('front')) boost -= 0.05;
-  } else if (wantsFront) {
-    if (descriptorSet.has('front')) boost += 0.18;
-    if (descriptorSet.has('back')) boost -= 0.05;
-  } else if (descriptorSet.has('front')) {
-    boost += 0.08;
+  const tokenOverlap = entry.tokens.filter((token) => queryTokenSet.has(token)).length;
+  const coreOverlap = entry.coreTokens.filter((token) => queryCoreSet.has(token)).length;
+  const muscleOverlap = entry.muscleTokens.filter((token) => queryCoreSet.has(token)).length;
+
+  const tokenScore = tokenOverlap / Math.max(entry.tokens.length || 1, query.tokens.length || 1);
+  const coreScore = coreOverlap / Math.max(entry.coreTokens.length || 1, query.coreTokens.length || 1);
+  const muscleScore = muscleOverlap / Math.max(entry.muscleTokens.length || 1, query.coreTokens.length || 1);
+
+  let nameScore = 0;
+  if (query.normalizedName && entry.normalized.includes(query.normalizedName)) {
+    nameScore = 0.6;
+  } else if (query.normalizedName && query.normalizedName.includes(entry.normalized)) {
+    nameScore = 0.55;
+  } else if (query.normalizedName) {
+    nameScore = diceCoefficient(query.bigrams, entry.bigrams) * 0.5;
   }
 
-  if (descriptorSet.size === 0) {
-    boost += 0.05;
-  }
+  const orientationScore = orientationBonus(entry, query);
 
-  return boost;
+  return tokenScore * 0.35 + coreScore * 0.35 + muscleScore * 0.2 + nameScore + orientationScore;
 }
 
 export function findExerciseAnimation(name) {
-  const nameTokens = tokenize(name);
-  const nameCoreTokens = tokenize(name, { omitDescriptors: true });
+  const tokens = tokenize(name);
+  const coreTokens = tokenize(name, { omitDescriptors: true });
   const normalizedName = normalizeKey(name);
-
-  const wantsSide = nameTokens.includes('side');
-  const wantsBack = nameTokens.includes('back');
-  const wantsFront = nameTokens.includes('front');
+  const bigrams = createBigrams(normalizedName);
+  const wantsFront = tokens.includes('front');
+  const wantsBack = tokens.includes('back');
+  const wantsSide = tokens.includes('side');
 
   const query = createQuerySummary({
     name,
     normalizedName,
-    tokens: nameTokens,
-    coreTokens: nameCoreTokens,
-    wantsSide,
-    wantsBack,
+    tokens,
+    coreTokens,
+    bigrams,
     wantsFront,
+    wantsBack,
+    wantsSide,
   });
 
-  if (!normalizedName && nameTokens.length === 0) {
-    return createUnmatched({ reason: 'missing-query', query });
+  if (!normalizedName && tokens.length === 0) {
+    return createUnmatched({ query, suggestion: null, score: 0 });
   }
 
-  const preferences = { wantsSide, wantsBack, wantsFront };
-
-  const exact = exactMatchIndex.get(normalizedName);
+  const exact = exactIndex.get(normalizedName);
   if (exact) {
-    return createMatch(exact, { strategy: 'exact', score: 1, query });
+    return createMatch(exact.entry, {
+      strategy: exact.aliasName === exact.entry.name ? 'exact' : 'exact-alias',
+      score: 1,
+      query,
+      aliasName: exact.aliasName,
+    });
   }
-
-  const coreKey = tokensToKey(nameCoreTokens);
-  if (coreKey) {
-    const coreMatch = chooseBestEntry(coreKeyIndex.get(coreKey), preferences);
-    if (coreMatch) {
-      return createMatch(coreMatch, { strategy: 'core-key', score: 0.95, query });
-    }
-
-    const aliasFallback = chooseBestEntry(aliasKeyIndex.get(coreKey), preferences);
-    if (aliasFallback) {
-      return createMatch(aliasFallback, { strategy: 'core-alias', score: 0.9, query });
-    }
-  }
-
-  const aliasKeys = generateAliasKeys(nameCoreTokens);
-  for (const aliasKey of aliasKeys) {
-    const coreAlias = chooseBestEntry(coreKeyIndex.get(aliasKey), preferences);
-    if (coreAlias) {
-      return createMatch(coreAlias, { strategy: 'alias-core', score: 0.85, query });
-    }
-    const looseAlias = chooseBestEntry(aliasKeyIndex.get(aliasKey), preferences);
-    if (looseAlias) {
-      return createMatch(looseAlias, { strategy: 'alias', score: 0.8, query });
-    }
-  }
-
-  const nameTokenSet = new Set(nameTokens);
-  const nameCoreSet = new Set(nameCoreTokens);
-  const nameBigrams = createBigrams(normalizedName);
 
   let bestEntry = null;
   let bestScore = 0;
 
-  for (const entry of animationIndex) {
-    const tokenOverlap = entry.tokens.filter((token) => nameTokenSet.has(token)).length;
-    const tokenScore = tokenOverlap / Math.max(entry.tokens.length || 1, nameTokens.length || 1);
-
-    const coreOverlap = entry.coreTokens.filter((token) => nameCoreSet.has(token)).length;
-    const coreScore = coreOverlap / Math.max(entry.coreTokens.length || 1, nameCoreTokens.length || 1);
-
-    const diceScore = diceCoefficient(nameBigrams, entry.bigrams);
-
-    let partialBonus = 0;
-    if (entry.normalized && normalizedName && (entry.normalized.includes(normalizedName) || normalizedName.includes(entry.normalized))) {
-      partialBonus += 0.3;
-    }
-    if (coreKey && entry.coreKey === coreKey) {
-      partialBonus += 0.25;
-    } else if (coreKey && entry.coreKey && (entry.coreKey.includes(coreKey) || coreKey.includes(entry.coreKey))) {
-      partialBonus += 0.15;
-    }
-
-    partialBonus += orientationBoost(entry.descriptors, preferences);
-
-    const totalScore = tokenScore * 0.45 + coreScore * 0.35 + diceScore * 0.2 + partialBonus;
-
-    if (totalScore > bestScore) {
-      bestScore = totalScore;
+  for (const entry of exerciseEntries) {
+    const score = evaluateEntry(entry, query);
+    if (score > bestScore) {
+      bestScore = score;
       bestEntry = entry;
     }
   }
 
-  if (bestEntry) {
-    if (bestScore >= FUZZY_SCORE_THRESHOLD) {
-      return createMatch(bestEntry, { strategy: 'fuzzy', score: bestScore, query });
-    }
-
-    if (isLowSignalQuery({ name, tokens: nameTokens, coreTokens: nameCoreTokens })) {
-      const suggestion = createSuggestion(bestEntry, bestScore);
-      return createMatch(bestEntry, {
-        strategy: 'fuzzy-low',
-        score: bestScore,
-        query,
-        confidence: 'low',
-        suggestion,
-      });
-    }
+  if (bestEntry && bestScore >= 0.25) {
+    return createMatch(bestEntry, {
+      strategy: 'scored-html',
+      score: bestScore,
+      query,
+      aliasName: bestEntry.name,
+    });
   }
 
   const suggestion = createSuggestion(bestEntry, bestScore);
-  return createUnmatched({ reason: 'no-match', query, suggestion, score: bestScore });
+  return createUnmatched({ query, suggestion, score: bestScore });
 }
 
 export function listAvailableWorkoutAnimations() {
-  return animationIndex.map((entry) => ({
-    name: entry.baseName,
+  return exerciseEntries.map((entry) => ({
+    name: entry.name,
+    muscle: entry.muscleName,
     descriptors: entry.descriptors,
-    tokens: entry.coreTokens,
-    src: entry.src,
+    fileName: entry.primary?.fileName || '',
+    src: entry.primary?.src || '',
   }));
 }
