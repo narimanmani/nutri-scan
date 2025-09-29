@@ -51,7 +51,7 @@ const MUSCLE_ID_TO_LIBRARY_KEY = {
   5: 'biceps',
   6: 'forearms',
   7: 'lats',
-  8: 'lats',
+  8: 'glutes',
   9: 'lower-back',
   10: 'traps',
   11: 'triceps',
