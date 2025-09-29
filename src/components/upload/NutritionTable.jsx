@@ -109,14 +109,11 @@ function computePerUnit(ingredient) {
   }, {});
 }
 
-function normalizeIngredient(ingredient, index = 0) {
+function normalizeIngredient(ingredient) {
   const safe = typeof ingredient === 'object' && ingredient !== null ? { ...ingredient } : {};
   const normalized = {
     id: typeof safe.id === 'string' && safe.id.length > 0 ? safe.id : generateIngredientId(),
-    name:
-      typeof safe.name === 'string' && safe.name.length > 0
-        ? safe.name
-        : `Ingredient ${index + 1}`,
+    name: typeof safe.name === 'string' ? safe.name : '',
     unit: canonicalizeUnit(safe.unit),
     amount: Number(safe.amount) || 0,
     ...createEmptyNutrients(),
@@ -145,19 +142,16 @@ function calculateTotals(ingredients = []) {
 }
 
 function createFallbackIngredient(meal) {
-  const ingredient = normalizeIngredient(
-    {
-      id: generateIngredientId(),
-      name: meal?.meal_name ? `${meal.meal_name} serving` : 'Meal serving',
-      unit: 'serving',
-      amount: 1,
-      ...NUTRIENT_FIELDS.reduce((acc, field) => {
-        acc[field] = Number(meal?.[field]) || 0;
-        return acc;
-      }, {})
-    },
-    0
-  );
+  const ingredient = normalizeIngredient({
+    id: generateIngredientId(),
+    name: meal?.meal_name ? `${meal.meal_name} serving` : 'Meal serving',
+    unit: 'serving',
+    amount: 1,
+    ...NUTRIENT_FIELDS.reduce((acc, field) => {
+      acc[field] = Number(meal?.[field]) || 0;
+      return acc;
+    }, {})
+  });
   ingredient._perUnit = computePerUnit(ingredient);
   return ingredient;
 }
@@ -174,7 +168,7 @@ function normalizeMeal(initialData) {
   };
 
   const normalizedIngredients = Array.isArray(base.ingredients) && base.ingredients.length > 0
-    ? base.ingredients.map((ingredient, index) => normalizeIngredient(ingredient, index))
+    ? base.ingredients.map((ingredient) => normalizeIngredient(ingredient))
     : [createFallbackIngredient(base)];
 
   const totals = calculateTotals(normalizedIngredients);
@@ -231,6 +225,15 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
   const suggestionTimersRef = useRef({});
   const latestQueryRef = useRef({});
   const lastEstimateSignatureRef = useRef({});
+
+  useEffect(() => {
+    const warmupQueries = ['chicken', 'beef', 'salmon fish'];
+    warmupQueries.forEach((query) => {
+      fetchIngredientSuggestions(query).catch((error) => {
+        console.debug('Suggestion warmup failed:', error);
+      });
+    });
+  }, []);
 
   useEffect(() => {
     setEditedData(normalizeMeal(initialData));
@@ -516,16 +519,13 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
 
   const handleAddIngredient = () => {
     setEditedData((prev) => {
-      const nextIngredient = normalizeIngredient(
-        {
-          id: generateIngredientId(),
-          name: 'New ingredient',
-          amount: 100,
-          unit: 'g',
-          ...createEmptyNutrients()
-        },
-        prev.ingredients?.length || 0
-      );
+      const nextIngredient = normalizeIngredient({
+        id: generateIngredientId(),
+        name: '',
+        amount: 100,
+        unit: 'g',
+        ...createEmptyNutrients()
+      });
       nextIngredient._perUnit = computePerUnit(nextIngredient);
       const ingredients = [...(prev.ingredients || []), nextIngredient];
       const totals = calculateTotals(ingredients);
@@ -547,16 +547,13 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
         remaining.length > 0
           ? remaining
           : [
-              normalizeIngredient(
-                {
-                  id: generateIngredientId(),
-                  name: 'New ingredient',
-                  amount: 0,
-                  unit: 'g',
-                  ...createEmptyNutrients()
-                },
-                0
-              )
+              normalizeIngredient({
+                id: generateIngredientId(),
+                name: '',
+                amount: 0,
+                unit: 'g',
+                ...createEmptyNutrients()
+              })
             ];
       const totals = calculateTotals(ingredients);
 
