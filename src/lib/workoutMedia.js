@@ -18,9 +18,8 @@ const STOP_WORDS = new Set([
   'using',
 ]);
 
-const gifModules = import.meta.glob('@/workout/Images/*.{gif,GIF}', {
+const gifModules = import.meta.glob('../workout/Images/*.{gif,GIF}', {
   eager: true,
-  import: 'default',
 });
 
 function normalizeToken(token) {
@@ -55,19 +54,27 @@ function normalizeKey(value) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-const animationIndex = Object.entries(gifModules).map(([path, src]) => {
-  const parts = path.split('/');
-  const fileName = parts[parts.length - 1];
-  const baseName = fileName.replace(/\.[^.]+$/, '');
-  return {
-    path,
-    fileName,
-    baseName,
-    normalized: normalizeKey(baseName),
-    tokens: tokenize(baseName),
-    src,
-  };
-});
+const animationIndex = Object.entries(gifModules)
+  .map(([path, module]) => {
+    const src = typeof module === 'string' ? module : module?.default;
+    if (!src) {
+      return null;
+    }
+
+    const parts = path.split('/');
+    const fileName = parts[parts.length - 1];
+    const baseName = fileName.replace(/\.[^.]+$/, '');
+
+    return {
+      path,
+      fileName,
+      baseName,
+      normalized: normalizeKey(baseName),
+      tokens: tokenize(baseName),
+      src,
+    };
+  })
+  .filter(Boolean);
 
 export function findExerciseAnimation(name) {
   const normalizedName = normalizeKey(name);
