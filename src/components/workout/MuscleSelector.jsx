@@ -60,9 +60,9 @@ export default function MuscleSelector({
   const statusCopy = getStatusCopy(status, error);
 
   return (
-    <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-8">
+    <div className="grid gap-6 lg:grid-cols-[minmax(22rem,1fr)_minmax(0,1fr)] lg:items-start lg:gap-8">
       <div
-        className="relative mx-auto aspect-[3/5] w-full max-w-sm overflow-hidden rounded-[2.25rem] border border-emerald-100 bg-gradient-to-b from-emerald-50 via-white to-emerald-100 shadow-inner lg:mx-0 lg:max-w-lg lg:flex-1 xl:max-w-xl"
+        className="relative mx-auto aspect-[3/5] w-full max-w-sm overflow-hidden rounded-[2.25rem] border border-emerald-100 bg-gradient-to-b from-emerald-50 via-white to-emerald-100 shadow-inner lg:mx-0 lg:h-full lg:max-w-none"
         onPointerLeave={() => setHoveredId(null)}
         role="presentation"
         style={{
@@ -157,7 +157,7 @@ export default function MuscleSelector({
         )}
       </div>
 
-      <div className="grid flex-1 gap-3 text-sm text-emerald-900/80 md:grid-cols-2">
+      <div className="grid gap-3 text-sm text-emerald-900/80 md:grid-cols-2">
         {status === 'loading' && (
           <p className="col-span-full rounded-2xl border border-dashed border-emerald-200 bg-emerald-50/70 px-4 py-3 text-center text-xs font-medium text-emerald-600">
             Fetching muscle overlays from the wger API…

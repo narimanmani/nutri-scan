@@ -244,7 +244,7 @@ export default function WorkoutPlanner() {
           />
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-2">
+        <div className="space-y-6">
           <div className="rounded-3xl border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-emerald-100 p-6 shadow-lg shadow-emerald-100/70">
             <div className="flex items-start justify-between gap-4">
               <h2 className="text-xl font-semibold text-emerald-900">Your Focus Areas</h2>
