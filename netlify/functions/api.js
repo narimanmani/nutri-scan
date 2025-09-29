@@ -1,6 +1,6 @@
 const { getStore } = require('@netlify/blobs');
 
-const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 8000);
+const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 20000);
 
 const suggestionCache = new Map();
 const estimateCache = new Map();

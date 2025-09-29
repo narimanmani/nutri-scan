@@ -650,7 +650,7 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
                               <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-gray-400" />
                             )}
                             {(isFetchingSuggestions || suggestionsForIngredient.length > 0) && (
-                              <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-64 min-w-[20rem] overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-xl">
+                              <div className="absolute left-0 right-0 bottom-full z-30 mb-2 max-h-64 min-w-[20rem] overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-xl">
                                 {suggestionsForIngredient.length === 0 ? (
                                   <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-500">
                                     {isFetchingSuggestions ? (
