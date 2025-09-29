@@ -92,7 +92,10 @@ export default function WorkoutPlanner() {
           .sort((a, b) => a.label.localeCompare(b.label));
 
         setCatalog({ status: 'success', muscles: normalized, error: '' });
-        setSelectedIds((prev) => prev.filter((id) => normalized.some((muscle) => muscle.id === id)));
+        setSelectedIds((prev) => {
+          const normalizedPrev = prev.map((id) => Number(id)).filter((id) => Number.isFinite(id));
+          return normalizedPrev.filter((id) => normalized.some((muscle) => Number(muscle.id) === id));
+        });
       })
       .catch((err) => {
         if (!isActive || err.name === 'AbortError') {
@@ -107,10 +110,19 @@ export default function WorkoutPlanner() {
     };
   }, []);
 
-  const selectedMuscles = useMemo(
-    () => catalog.muscles.filter((muscle) => selectedIds.includes(muscle.id)),
-    [catalog.muscles, selectedIds]
-  );
+  const selectedMuscles = useMemo(() => {
+    if (selectedIds.length === 0 || catalog.muscles.length === 0) {
+      return [];
+    }
+
+    return selectedIds
+      .map((id) => {
+        const numericId = Number(id);
+        if (!Number.isFinite(numericId)) return null;
+        return catalog.muscles.find((muscle) => Number(muscle.id) === numericId) || null;
+      })
+      .filter(Boolean);
+  }, [catalog.muscles, selectedIds]);
 
   useEffect(() => {
     return () => {
@@ -120,9 +132,27 @@ export default function WorkoutPlanner() {
 
   const toggleMuscle = (muscle) => {
     if (!muscle) return;
-    setSelectedIds((prev) =>
-      prev.includes(muscle.id) ? prev.filter((id) => id !== muscle.id) : [...prev, muscle.id]
-    );
+    const muscleId = Number(muscle.id);
+    if (!Number.isFinite(muscleId)) {
+      return;
+    }
+
+    setSelectedIds((prev) => {
+      const normalizedPrev = prev.map((id) => Number(id)).filter((id) => Number.isFinite(id));
+      return normalizedPrev.includes(muscleId)
+        ? normalizedPrev.filter((id) => id !== muscleId)
+        : [...normalizedPrev, muscleId];
+    });
+  };
+
+  const handleResetFocus = () => {
+    setSelectedIds([]);
+    setPlan([]);
+    setError('');
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = undefined;
+    }
   };
 
   const handleGeneratePlan = async () => {
@@ -139,7 +169,20 @@ export default function WorkoutPlanner() {
     abortRef.current = controller;
 
     try {
-      const result = await generateWorkoutPlanFromMuscles(selectedMuscles, {
+      const musclesForPlan = selectedMuscles.map((muscle) => ({
+        ...muscle,
+        id: Number(muscle.id),
+        apiIds: Array.isArray(muscle.apiIds)
+          ? muscle.apiIds.map((value) => Number(value)).filter((value) => Number.isFinite(value))
+          : [Number(muscle.id)].filter((value) => Number.isFinite(value)),
+      }));
+
+      if (musclesForPlan.length === 0) {
+        setError('We could not match your selected focus areas to the workout library. Try choosing the muscles again.');
+        return;
+      }
+
+      const result = await generateWorkoutPlanFromMuscles(musclesForPlan, {
         exercisesPerMuscle: 3,
         signal: controller.signal,
       });
@@ -203,7 +246,18 @@ export default function WorkoutPlanner() {
 
         <div className="flex flex-col gap-6">
           <div className="rounded-3xl border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-emerald-100 p-6 shadow-lg shadow-emerald-100/70">
-            <h2 className="text-xl font-semibold text-emerald-900">Your Focus Areas</h2>
+            <div className="flex items-start justify-between gap-4">
+              <h2 className="text-xl font-semibold text-emerald-900">Your Focus Areas</h2>
+              {selectedMuscles.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleResetFocus}
+                  className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-600 shadow-sm transition hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+                >
+                  Reset
+                </button>
+              )}
+            </div>
             {selectedMuscles.length === 0 ? (
               <p className="mt-3 text-sm text-emerald-800/80">
                 Tap on the anatomy illustration or use the list to highlight the muscles you would like to train today. Selected groups will appear here with quick tips.

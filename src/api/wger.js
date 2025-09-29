@@ -29,9 +29,19 @@ const MANUAL_MUSCLE_SYNONYMS = {
   abdominals: ['abs', 'rectus abdominis', 'core', 'stomach', 'six pack'],
   biceps: ['biceps', 'biceps brachii', 'brachialis', 'upper arm flexors'],
   calves: ['calves', 'calf', 'gastrocnemius', 'soleus', 'tibialis anterior', 'lower leg', 'shin'],
-  chest: ['chest', 'pectoralis', 'pectoralis major', 'pecs'],
+  chest: ['chest', 'pectoralis', 'pectoralis major', 'pecs', 'upper chest', 'lower chest'],
   forearms: ['forearms', 'brachioradialis', 'forearm flexors', 'forearm extensors'],
-  glutes: ['glutes', 'gluteus maximus', 'gluteus medius', 'gluteus minimus', 'hips', 'abductors', 'hip abductors'],
+  glutes: [
+    'glutes',
+    'gluteus maximus',
+    'gluteus medius',
+    'gluteus minimus',
+    'hips',
+    'abductors',
+    'hip abductors',
+    'butt',
+    'buttocks',
+  ],
   hamstrings: ['hamstrings', 'biceps femoris', 'semitendinosus', 'semimembranosus', 'posterior chain'],
   lats: ['lats', 'latissimus dorsi', 'back width'],
   'lower-back': ['lower back', 'erector spinae', 'lumbar', 'spinal erectors'],
@@ -79,6 +89,29 @@ const MANUAL_MUSCLE_SYNONYMS = {
   ],
   triceps: ['triceps', 'triceps brachii'],
 };
+
+function buildMuscleSearchValues(muscle) {
+  const values = [muscle?.libraryKey, muscle?.label, muscle?.name, muscle?.normalizedLabel];
+  if (Array.isArray(muscle?.synonyms)) {
+    values.push(...muscle.synonyms);
+  }
+  const normalized = values
+    .map((value) => normalizeLabel(typeof value === 'string' ? value : ''))
+    .filter(Boolean);
+  return Array.from(new Set(normalized));
+}
+
+function entryMatchesSearch(entry, searchValues) {
+  if (!entry || !Array.isArray(searchValues) || searchValues.length === 0) {
+    return false;
+  }
+
+  if (searchValues.includes(entry.normalizedLabel)) {
+    return true;
+  }
+
+  return entry.normalizedSynonyms.some((synonym) => searchValues.includes(synonym));
+}
 
 const MUSCLE_ID_TO_LIBRARY_KEY = {
   1: 'biceps',
@@ -318,21 +351,25 @@ function findLibraryEntryForMuscle(muscle) {
   }
 
   const muscleId = muscle?.id;
+  const searchValues = buildMuscleSearchValues(muscle);
+
   if (muscleId != null) {
     const mappedKey = MUSCLE_ID_TO_LIBRARY_KEY[muscleId];
     if (mappedKey && library.has(mappedKey)) {
-      return library.get(mappedKey);
+      const mappedEntry = library.get(mappedKey);
+      if (searchValues.length === 0 || entryMatchesSearch(mappedEntry, searchValues)) {
+        return mappedEntry;
+      }
+      // If the hard-coded map disagrees with the anatomy label, fall back to fuzzy matching.
+      // This guards against stale WGER IDs pointing at the wrong local page.
     }
   }
 
-  const searchValues = [normalizeLabel(muscle?.libraryKey), normalizeLabel(muscle?.label), normalizeLabel(muscle?.name)];
-  const uniqueValues = Array.from(new Set(searchValues.filter(Boolean)));
+  const uniqueValues = searchValues;
 
-  for (const value of uniqueValues) {
-    for (const entry of library.values()) {
-      if (value === entry.normalizedLabel || entry.normalizedSynonyms.includes(value)) {
-        return entry;
-      }
+  for (const entry of library.values()) {
+    if (entryMatchesSearch(entry, uniqueValues)) {
+      return entry;
     }
   }
 

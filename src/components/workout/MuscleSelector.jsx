@@ -31,6 +31,10 @@ export default function MuscleSelector({
   error = '',
 }) {
   const [hoveredId, setHoveredId] = useState(null);
+  const normalizedSelectedIds = useMemo(
+    () => selectedIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)),
+    [selectedIds]
+  );
 
   const musclesForView = useMemo(
     () => muscles.filter((muscle) => muscle.view === view),
@@ -45,12 +49,12 @@ export default function MuscleSelector({
     if (hoveredId != null) {
       return musclesForView.find((muscle) => muscle.id === hoveredId) || null;
     }
-    for (const id of selectedIds) {
-      const match = musclesForView.find((muscle) => muscle.id === id);
+    for (const id of normalizedSelectedIds) {
+      const match = musclesForView.find((muscle) => Number(muscle.id) === id);
       if (match) return match;
     }
     return null;
-  }, [hoveredId, musclesForView, selectedIds]);
+  }, [hoveredId, musclesForView, normalizedSelectedIds]);
 
   const baseImage = BASE_SILHOUETTES[view];
   const statusCopy = getStatusCopy(status, error);
@@ -90,7 +94,8 @@ export default function MuscleSelector({
           const highlight = muscle.highlightUrl || muscle.secondaryUrl;
           if (!highlight) return null;
 
-          const isSelected = selectedIds.includes(muscle.id);
+          const muscleId = Number(muscle.id);
+          const isSelected = normalizedSelectedIds.includes(muscleId);
           const isHovered = hoveredId === muscle.id;
           const opacity = isSelected ? 1 : isHovered ? 0.9 : 0;
           const overlayStyle = buildOverlayStyle(opacity);
@@ -173,7 +178,8 @@ export default function MuscleSelector({
 
         {musclesForView.map((muscle) => {
           const highlight = muscle.highlightUrl || muscle.secondaryUrl;
-          const isSelected = selectedIds.includes(muscle.id);
+          const muscleId = Number(muscle.id);
+          const isSelected = normalizedSelectedIds.includes(muscleId);
           const isHovered = hoveredId === muscle.id;
           const overlayStyle = buildOverlayStyle(isSelected || isHovered ? 1 : 0.65);
 
