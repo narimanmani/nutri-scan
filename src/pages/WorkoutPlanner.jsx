@@ -290,9 +290,6 @@ export default function WorkoutPlanner() {
                     </p>
                     <h3 className="text-xl font-semibold text-emerald-900">{section.muscle.label}</h3>
                   </div>
-                  <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-600">
-                    {section.exercises.length} moves
-                  </span>
                 </header>
 
                 {section.overviewError ? (
@@ -338,13 +335,13 @@ export default function WorkoutPlanner() {
                       ].filter((item) => item.value);
                       const cues = sanitizeList(exercise.cues);
                       const benefits = sanitizeList(exercise.benefits);
-                      const videoUrls = sanitizeList(exercise.videoUrls);
+                      const photoUrls = sanitizeList(exercise.photoUrls);
                       const safetyNotes = sanitizeText(exercise.safetyNotes);
 
                       const hasPrescription = prescriptionDetails.length > 0;
                       const hasCues = cues.length > 0;
                       const hasBenefits = benefits.length > 0;
-                      const hasVideos = videoUrls.length > 0;
+                      const hasPhotos = photoUrls.length > 0;
 
                       return (
                         <li
@@ -414,16 +411,16 @@ export default function WorkoutPlanner() {
                             </p>
                           )}
 
-                          {hasVideos && (
+                          {hasPhotos && (
                             <div>
                               <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-500">
-                                Suggested demos
+                                Reference photos
                               </p>
                               <ul className="mt-2 space-y-1 text-xs text-emerald-700 underline decoration-emerald-300 underline-offset-2">
-                                {videoUrls.map((url, index) => (
+                                {photoUrls.map((url, index) => (
                                   <li key={`${exercise.id}-video-${index}`}>
                                     <a href={url} target="_blank" rel="noopener noreferrer" className="hover:text-emerald-900">
-                                      {url}
+                                      {`View photo ${index + 1}`}
                                     </a>
                                   </li>
                                 ))}

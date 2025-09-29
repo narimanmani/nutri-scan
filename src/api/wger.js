@@ -67,6 +67,45 @@ function toAbsoluteAssetUrl(url = '') {
   return `${normalizedBase}${normalizedPath}`;
 }
 
+function extractPhotoUrls(exercise) {
+  const urls = new Set();
+
+  const appendUrl = (value) => {
+    const normalized = toAbsoluteAssetUrl(value);
+    if (normalized) {
+      urls.add(normalized);
+    }
+  };
+
+  if (typeof exercise?.image === 'string') {
+    appendUrl(exercise.image);
+  }
+
+  const images = exercise?.images;
+  if (Array.isArray(images)) {
+    images.forEach((entry) => {
+      if (!entry) return;
+
+      if (typeof entry === 'string') {
+        appendUrl(entry);
+        return;
+      }
+
+      if (typeof entry === 'object') {
+        if (typeof entry.image === 'string') {
+          appendUrl(entry.image);
+        } else if (typeof entry.image_url === 'string') {
+          appendUrl(entry.image_url);
+        } else if (typeof entry.url === 'string') {
+          appendUrl(entry.url);
+        }
+      }
+    });
+  }
+
+  return Array.from(urls);
+}
+
 export async function generateWorkoutPlanFromMuscles(
   muscles,
   { exercisesPerMuscle = 3, signal } = {}
@@ -133,7 +172,8 @@ export async function generateWorkoutPlanFromMuscles(
               equipment: insights.equipment,
               cues: insights.cues,
               benefits: insights.benefits,
-              videoUrls: insights.videoUrls,
+              videoUrls: [],
+              photoUrls: extractPhotoUrls(exercise),
               safetyNotes: insights.safetyNotes,
             };
           } catch (detailError) {
@@ -158,6 +198,7 @@ export async function generateWorkoutPlanFromMuscles(
               cues: [],
               benefits: [],
               videoUrls: [],
+              photoUrls: extractPhotoUrls(exercise),
               safetyNotes: '',
               detailError: errorMessage,
             };
