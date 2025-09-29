@@ -329,7 +329,7 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
       return;
     }
 
-    const suggestionKey = suggestion.fdcId || suggestion.id || suggestion.name;
+    const suggestionKey = suggestion.id || suggestion.name;
     const signature = `${suggestionKey}|${amount}|${ingredient.unit}`;
     if (lastEstimateSignatureRef.current[id] === signature) {
       return;
@@ -343,7 +343,7 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
         ingredientName: suggestion.name,
         amount,
         unit: ingredient.unit,
-        fdcId: suggestion.fdcId || suggestion.id
+        suggestionId: suggestion.id
       });
 
       if (!estimate) {
@@ -682,9 +682,11 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
                                           )}
                                           {suggestion.data_source && (
                                             <div className="text-[10px] uppercase tracking-wide text-gray-300 mt-2">
-                                              {suggestion.data_source === 'usda'
-                                                ? 'USDA FoodData Central'
-                                                : 'Reference library'}
+                                              {suggestion.data_source === 'openai'
+                                                ? 'AI suggestion'
+                                                : suggestion.data_source === 'fallback'
+                                                  ? 'Reference library'
+                                                  : 'Suggested value'}
                                             </div>
                                           )}
                                         </button>
@@ -700,8 +702,8 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
                           </p>
                           {selectedSuggestion && (
                             <p className="text-xs text-emerald-600 mt-1">
-                              {selectedSuggestion.data_source === 'usda'
-                                ? 'USDA suggestion'
+                              {selectedSuggestion.data_source === 'openai'
+                                ? 'AI suggestion'
                                 : 'Suggested value'}: {selectedSuggestion.name}
                             </p>
                           )}

@@ -6,7 +6,6 @@ A Vite + React application that analyzes meal photos using OpenAI GPT-4o and kee
 
 - Node.js 18+
 - An OpenAI API key with access to the GPT-4o model (optional for mock responses)
-- (Optional) A [USDA FoodData Central API key](https://fdc.nal.usda.gov/api-guide.html) for live ingredient suggestions and nutrition lookups
 - (Optional) [Netlify CLI](https://docs.netlify.com/cli/get-started/) for local function development
 
 ## Getting Started
@@ -19,7 +18,9 @@ A Vite + React application that analyzes meal photos using OpenAI GPT-4o and kee
    `VITE_OPENAI_API_KEY` enables the in-browser fallback without running Netlify locally.
    ```env
    OPENAI_API_KEY=sk-your-key
-   USDA_API_KEY=your-usda-api-key
+   # Optionally override the smaller models used for typeahead + nutrition fills
+   # OPENAI_SUGGESTION_MODEL=gpt-4o-mini
+   # OPENAI_NUTRITION_MODEL=gpt-4o-mini
    # Optional fallback for running `npm run dev` without Netlify
    VITE_OPENAI_API_KEY=sk-your-key
    ```
@@ -44,5 +45,5 @@ npm run build
 
 - **Image analysis**: The upload flow converts photos to base64 data URLs and proxies them through a Netlify function that invokes OpenAI GPT-4o (vision + text) for calorie and macronutrient estimates.
 - **Storage**: Meals are stored in `src/data/meals.json` and synchronized to `localStorage` so the app behaves like an offline JSON database in the browser.
-- **Ingredient suggestions**: Ingredient lookups are proxied through the Netlify function to the USDA FoodData Central API. If the USDA key is missing or the service is unavailable, the UI falls back to a curated set of common foods with per-gram nutrition data.
+- **Ingredient suggestions**: Ingredient lookups and per-ingredient calorie estimates are proxied through the Netlify function to the OpenAI API for contextual results. When the key is missing or OpenAI cannot be reached, the UI falls back to a curated set of common foods with per-gram nutrition data.
 - **Mock mode**: When no API keys are configured, realistic mock responses are returned so the experience can be demonstrated without external calls.

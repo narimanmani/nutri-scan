@@ -91,11 +91,70 @@ const UNIT_ALIASES = {
   portions: 'serving'
 };
 
-const USDA_API_KEY = process.env.USDA_API_KEY;
-const USDA_TIMEOUT_MS = Number(process.env.INGREDIENT_API_TIMEOUT_MS || 8000);
-const USDA_SEARCH_URL = 'https://api.nal.usda.gov/fdc/v1/foods/search';
-const USDA_FOOD_URL = 'https://api.nal.usda.gov/fdc/v1/food';
+const NUTRIENT_FIELDS = [
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'fiber',
+  'sugar',
+  'sodium',
+  'potassium',
+  'calcium',
+  'iron',
+  'vitamin_c',
+  'vitamin_a'
+];
+
 const DEFAULT_SUGGESTION_LIMIT = 7;
+const OPENAI_SUGGESTION_MODEL = process.env.OPENAI_SUGGESTION_MODEL || 'gpt-4o-mini';
+const OPENAI_NUTRITION_MODEL =
+  process.env.OPENAI_NUTRITION_MODEL || process.env.OPENAI_SUGGESTION_MODEL || 'gpt-4o-mini';
+
+const SUGGESTION_RESPONSE_SCHEMA = {
+  name: 'ingredient_suggestions',
+  schema: {
+    type: 'object',
+    properties: {
+      suggestions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'Stable identifier for the suggestion.' },
+            name: { type: 'string', description: 'Ingredient name a person might type.' },
+            description: {
+              type: 'string',
+              description: 'Short clarifying details such as preparation or brand.'
+            },
+            typical_unit: {
+              type: 'string',
+              description: 'Most common measuring unit such as g, cup, serving, or ml.'
+            },
+            example_portion: {
+              type: 'string',
+              description: 'Example portion string like “85 g” or “1 cup”.'
+            }
+          },
+          required: ['name']
+        }
+      }
+    },
+    required: ['suggestions']
+  }
+};
+
+const INGREDIENT_ESTIMATE_SCHEMA = {
+  name: 'ingredient_estimate',
+  schema: {
+    type: 'object',
+    properties: NUTRIENT_FIELDS.reduce((acc, field) => {
+      acc[field] = { type: 'number' };
+      return acc;
+    }, {}),
+    required: ['calories']
+  }
+};
 
 function canonicalizeUnit(unit) {
   if (typeof unit !== 'string') {
@@ -114,21 +173,6 @@ function canonicalizeUnit(unit) {
 
   return CANONICAL_UNITS.includes(normalized) ? normalized : 'g';
 }
-
-const NUTRIENT_FIELDS = [
-  'calories',
-  'protein',
-  'carbs',
-  'fat',
-  'fiber',
-  'sugar',
-  'sodium',
-  'potassium',
-  'calcium',
-  'iron',
-  'vitamin_c',
-  'vitamin_a'
-];
 
 const FALLBACK_INGREDIENTS = [
   {
@@ -353,7 +397,8 @@ function fallbackEstimate({ ingredientName, amount, unit }) {
       calcium: 0,
       iron: 0,
       vitamin_c: 0,
-      vitamin_a: 0
+      vitamin_a: 0,
+      data_source: 'fallback'
     };
   }
 
@@ -383,6 +428,7 @@ function fallbackEstimate({ ingredientName, amount, unit }) {
     }
   });
 
+  estimate.data_source = 'fallback';
   return estimate;
 }
 
@@ -433,11 +479,98 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = OPENAI_REQUEST_TI
   }
 }
 
-async function fetchUsdaSuggestions(query) {
-  if (!USDA_API_KEY) {
-    return { suggestions: fallbackSuggestions(query) };
+function slugify(value) {
+  if (typeof value !== 'string') {
+    return '';
   }
 
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function normalizeAiSuggestion(rawSuggestion, index = 0) {
+  if (!rawSuggestion) {
+    return null;
+  }
+
+  const name = typeof rawSuggestion.name === 'string' ? rawSuggestion.name.trim() : '';
+  if (!name) {
+    return null;
+  }
+
+  const baseId =
+    typeof rawSuggestion.id === 'string' && rawSuggestion.id.trim().length > 0
+      ? rawSuggestion.id.trim()
+      : slugify(`${name}-${index}`) || `suggestion_${index}`;
+
+  const suggestion = {
+    id: baseId,
+    name,
+    data_source: 'openai'
+  };
+
+  if (typeof rawSuggestion.description === 'string' && rawSuggestion.description.trim()) {
+    suggestion.description = rawSuggestion.description.trim();
+  }
+
+  if (typeof rawSuggestion.example_portion === 'string' && rawSuggestion.example_portion.trim()) {
+    suggestion.example_portion = rawSuggestion.example_portion.trim();
+  }
+
+  if (typeof rawSuggestion.typical_unit === 'string' && rawSuggestion.typical_unit.trim()) {
+    suggestion.typical_unit = canonicalizeUnit(rawSuggestion.typical_unit);
+  }
+
+  return suggestion;
+}
+
+async function callOpenAiForJson({ messages, schema, model = 'gpt-4o-mini', timeoutMs = OPENAI_REQUEST_TIMEOUT_MS }) {
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is not configured.');
+  }
+
+  const response = await fetchWithTimeout(
+    'https://api.openai.com/v1/chat/completions',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        messages,
+        response_format: { type: 'json_schema', json_schema: schema }
+      })
+    },
+    timeoutMs
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error?.error?.message || `OpenAI request failed with status ${response.status}`);
+  }
+
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
+
+  if (!content) {
+    throw new Error('OpenAI response did not include any content.');
+  }
+
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    throw new Error('Failed to parse OpenAI response JSON.');
+  }
+}
+
+async function fetchAiSuggestions(query) {
   const cached = getCachedSuggestions(query);
   if (cached) {
     return cached;
@@ -447,48 +580,43 @@ async function fetchUsdaSuggestions(query) {
     return cacheSuggestions(query, { suggestions: [] });
   }
 
-  const searchUrl = `${USDA_SEARCH_URL}?api_key=${USDA_API_KEY}`;
-  const body = {
-    query: query.trim(),
-    pageSize: 10,
-    sortBy: 'dataType.keyword',
-    sortOrder: 'desc',
-    requireAllWords: false,
-    dataType: ['Branded', 'Survey (FNDDS)', 'SR Legacy', 'Foundation']
-  };
+  const trimmedQuery = query.trim();
+
+  if (!process.env.OPENAI_API_KEY) {
+    return cacheSuggestions(query, { suggestions: fallbackSuggestions(trimmedQuery) });
+  }
 
   try {
-    const response = await fetchWithTimeout(
-      searchUrl,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      },
-      USDA_TIMEOUT_MS
-    );
+    const result = await callOpenAiForJson({
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You help people log meals by suggesting closely related ingredients based on their partial input. Return relevant whole foods or packaged ingredients without recipes.'
+        },
+        {
+          role: 'user',
+          content: `Suggest up to ${DEFAULT_SUGGESTION_LIMIT} ingredient ideas matching "${trimmedQuery}". Focus on realistic grocery or kitchen items and include preparation details when helpful.`
+        }
+      ],
+      schema: SUGGESTION_RESPONSE_SCHEMA,
+      model: OPENAI_SUGGESTION_MODEL
+    });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      console.warn('USDA ingredient suggestion request returned an error. Using fallback data.', error);
-      return cacheSuggestions(query, { suggestions: fallbackSuggestions(query) });
-    }
-
-    const data = await response.json();
-    const foods = Array.isArray(data?.foods) ? data.foods : [];
-    const suggestions = foods
-      .map((food) => formatUsdaSuggestion(food))
+    const rawSuggestions = Array.isArray(result?.suggestions) ? result.suggestions : [];
+    const suggestions = rawSuggestions
+      .map((item, index) => normalizeAiSuggestion(item, index))
       .filter(Boolean)
       .slice(0, DEFAULT_SUGGESTION_LIMIT);
 
     if (suggestions.length === 0) {
-      return cacheSuggestions(query, { suggestions: fallbackSuggestions(query) });
+      return cacheSuggestions(query, { suggestions: fallbackSuggestions(trimmedQuery) });
     }
 
     return cacheSuggestions(query, { suggestions });
   } catch (error) {
-    console.warn('USDA ingredient suggestion request failed. Using fallback data.', error);
-    return cacheSuggestions(query, { suggestions: fallbackSuggestions(query) });
+    console.warn('OpenAI ingredient suggestion request failed. Using fallback data.', error);
+    return cacheSuggestions(query, { suggestions: fallbackSuggestions(trimmedQuery) });
   }
 }
 
@@ -496,286 +624,72 @@ function safeRound(value) {
   return Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
 }
 
-function gramsFromServing(amount, unit, food) {
+async function estimateIngredientWithOpenAi({ ingredientName, amount, unit, suggestionId }) {
   const normalizedUnit = canonicalizeUnit(unit);
   const numericAmount = Number(amount);
-  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
-    return null;
-  }
-
-  if (normalizedUnit === 'g' || normalizedUnit === 'ml') {
-    return numericAmount;
-  }
-
-  if (normalizedUnit === 'oz') {
-    return numericAmount * 28.3495;
-  }
-
-  if (normalizedUnit === 'cup') {
-    const portion = findPortionGramWeight(food, (text) => text.includes('cup'));
-    if (portion) {
-      return numericAmount * portion;
-    }
-    return numericAmount * 240;
-  }
-
-  if (normalizedUnit === 'serving') {
-    const portion = findPortionGramWeight(food);
-    if (portion) {
-      return numericAmount * portion;
-    }
-  }
-
-  return numericAmount * (FALLBACK_UNIT_TO_GRAMS[normalizedUnit] || 1);
-}
-
-function findPortionGramWeight(food, matcher) {
-  if (!Array.isArray(food?.foodPortions)) {
-    return null;
-  }
-
-  const predicate = typeof matcher === 'function' ? matcher : () => true;
-
-  for (const portion of food.foodPortions) {
-    const description = `${portion.modifier || ''} ${portion.measureUnitAbbreviation || ''} ${portion.portionDescription || ''}`
-      .trim()
-      .toLowerCase();
-
-    if (!description && matcher) {
-      continue;
-    }
-
-    if (!matcher || predicate(description)) {
-      const weight = Number(portion.gramWeight);
-      if (Number.isFinite(weight) && weight > 0) {
-        return weight;
-      }
-    }
-  }
-
-  return null;
-}
-
-function extractNutrientsFromFood(food) {
-  const perGram = {};
-  let referenceGrams = null;
-
-  if (food?.labelNutrients && Number.isFinite(Number(food?.servingSize))) {
-    const grams = gramsFromServing(food.servingSize, food.servingSizeUnit, food);
-    if (Number.isFinite(grams) && grams > 0) {
-      referenceGrams = grams;
-
-      const ln = food.labelNutrients;
-      if (ln.calories?.value != null) {
-        perGram.calories = ln.calories.value / grams;
-      }
-      if (ln.protein?.value != null) {
-        perGram.protein = ln.protein.value / grams;
-      }
-      if (ln.carbohydrates?.value != null) {
-        perGram.carbs = ln.carbohydrates.value / grams;
-      }
-      if (ln.fat?.value != null) {
-        perGram.fat = ln.fat.value / grams;
-      }
-      if (ln.fiber?.value != null) {
-        perGram.fiber = ln.fiber.value / grams;
-      }
-      if (ln.sugars?.value != null) {
-        perGram.sugar = ln.sugars.value / grams;
-      }
-      if (ln.sodium?.value != null) {
-        perGram.sodium = ln.sodium.value / grams;
-      }
-      if (ln.potassium?.value != null) {
-        perGram.potassium = ln.potassium.value / grams;
-      }
-      if (ln.calcium?.value != null) {
-        perGram.calcium = ln.calcium.value / grams;
-      }
-      if (ln.iron?.value != null) {
-        perGram.iron = ln.iron.value / grams;
-      }
-      if (ln.vitaminC?.value != null) {
-        perGram.vitamin_c = ln.vitaminC.value / grams;
-      }
-      if (ln.vitaminA?.value != null) {
-        perGram.vitamin_a = ln.vitaminA.value / grams;
-      }
-    }
-  }
-
-  if (!referenceGrams && Array.isArray(food?.foodNutrients)) {
-    const nutrientMap = {
-      calories: ['energy'],
-      protein: ['protein'],
-      carbs: ['carbohydrate, by difference'],
-      fat: ['total lipid (fat)'],
-      fiber: ['fiber, total dietary'],
-      sugar: ['sugars, total', 'sugars, total including nlea'],
-      sodium: ['sodium, na'],
-      potassium: ['potassium, k'],
-      calcium: ['calcium, ca'],
-      iron: ['iron, fe'],
-      vitamin_c: ['vitamin c, total ascorbic acid'],
-      vitamin_a: ['vitamin a, iu', 'vitamin a, rae']
-    };
-
-    for (const [field, names] of Object.entries(nutrientMap)) {
-      const match = food.foodNutrients.find((nutrient) => {
-        const name = nutrient?.nutrientName?.toLowerCase();
-        return name && names.includes(name);
-      });
-
-      if (match && Number.isFinite(Number(match.amount))) {
-        perGram[field] = Number(match.amount) / 100;
-      }
-    }
-
-    referenceGrams = 100;
-  }
-
-  return { perGram, referenceGrams };
-}
-
-function scaleNutrients(perGram, grams) {
-  const result = {
-    calories: 0,
-    protein: 0,
-    carbs: 0,
-    fat: 0,
-    fiber: 0,
-    sugar: 0,
-    sodium: 0,
-    potassium: 0,
-    calcium: 0,
-    iron: 0,
-    vitamin_c: 0,
-    vitamin_a: 0
-  };
-
-  Object.entries(perGram || {}).forEach(([key, value]) => {
-    if (result.hasOwnProperty(key)) {
-      result[key] = safeRound((Number(value) || 0) * grams);
-    }
-  });
-
-  return result;
-}
-
-function formatUsdaSuggestion(food) {
-  if (!food || !food.fdcId || !food.description) {
-    return null;
-  }
-
-  const descriptionParts = [];
-  if (food.brandOwner) {
-    descriptionParts.push(food.brandOwner);
-  } else if (food.brandName) {
-    descriptionParts.push(food.brandName);
-  }
-
-  if (food.dataType) {
-    descriptionParts.push(food.dataType);
-  }
-
-  const portionText = food.householdServingFullText || formatServingText(food);
-  if (portionText) {
-    descriptionParts.push(`Serving: ${portionText}`);
-  }
-
-  const typicalUnit = canonicalizeUnit(food.servingSizeUnit) || 'g';
-  const examplePortion = portionText || (food.servingSize ? `${food.servingSize} ${food.servingSizeUnit || typicalUnit}` : null);
-
-  return {
-    id: String(food.fdcId),
-    fdcId: food.fdcId,
-    name: titleCase(food.description),
-    description: descriptionParts.join(' • ') || undefined,
-    typical_unit: typicalUnit,
-    example_portion: examplePortion || undefined,
-    data_source: 'usda'
-  };
-}
-
-function formatServingText(food) {
-  if (!Number.isFinite(Number(food?.servingSize))) {
-    return null;
-  }
-
-  const unit = food.servingSizeUnit || '';
-  return `${food.servingSize} ${unit}`.trim();
-}
-
-function titleCase(text) {
-  return text
-    ? text
-        .toLowerCase()
-        .split(' ')
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' ')
-    : text;
-}
-
-async function fetchUsdaFoodDetails(fdcId) {
-  if (!USDA_API_KEY || !fdcId) {
-    return null;
-  }
-
-  const url = `${USDA_FOOD_URL}/${fdcId}?api_key=${USDA_API_KEY}`;
-
-  try {
-    const response = await fetchWithTimeout(url, {}, USDA_TIMEOUT_MS);
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      console.warn('USDA ingredient detail request returned an error.', error);
-      return null;
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.warn('USDA ingredient detail request failed.', error);
-    return null;
-  }
-}
-
-async function estimateIngredientWithUsda({ ingredientName, amount, unit, fdcId }) {
-  const normalizedUnit = canonicalizeUnit(unit);
-  const safeAmount = Number(amount) || 0;
   const normalizedName = typeof ingredientName === 'string' ? ingredientName.trim() : '';
-  const cacheKey = fdcId ? `${fdcId}|${safeAmount}|${normalizedUnit}` : normalizedName ? `${normalizedName}|${safeAmount}|${normalizedUnit}` : null;
+
+  const cacheKey = suggestionId
+    ? `${suggestionId}|${numericAmount}|${normalizedUnit}`
+    : normalizedName
+      ? `${normalizedName.toLowerCase()}|${numericAmount}|${normalizedUnit}`
+      : null;
 
   const cached = getCachedEstimate(cacheKey);
   if (cached) {
     return cached;
   }
 
-  if (safeAmount <= 0) {
-    return cacheEstimate(cacheKey, fallbackEstimate({ ingredientName, amount: safeAmount, unit: normalizedUnit }));
+  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+    return cacheEstimate(
+      cacheKey,
+      fallbackEstimate({ ingredientName: normalizedName, amount: numericAmount, unit: normalizedUnit })
+    );
   }
 
-  const detail = await fetchUsdaFoodDetails(fdcId);
-
-  if (!detail) {
-    return cacheEstimate(cacheKey, fallbackEstimate({ ingredientName, amount: safeAmount, unit: normalizedUnit }));
+  if (!process.env.OPENAI_API_KEY) {
+    return cacheEstimate(
+      cacheKey,
+      fallbackEstimate({ ingredientName: normalizedName, amount: numericAmount, unit: normalizedUnit })
+    );
   }
 
-  const { perGram, referenceGrams } = extractNutrientsFromFood(detail);
+  try {
+    const result = await callOpenAiForJson({
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a meticulous nutrition scientist. Estimate calories and detailed nutrients for single ingredients and typical grocery items. Use grams for macros, milligrams for minerals (vitamin_a in IU), and respond with zero if unsure.'
+        },
+        {
+          role: 'user',
+          content: `Ingredient: ${normalizedName || 'Unknown ingredient'}\nAmount: ${numericAmount}\nUnit: ${normalizedUnit}\nReturn the nutrient values for this portion.`
+        }
+      ],
+      schema: INGREDIENT_ESTIMATE_SCHEMA,
+      model: OPENAI_NUTRITION_MODEL
+    });
 
-  if (!perGram || Object.keys(perGram).length === 0) {
-    return cacheEstimate(cacheKey, fallbackEstimate({ ingredientName, amount: safeAmount, unit: normalizedUnit }));
+    const estimate = {
+      name: normalizedName || 'Ingredient',
+      amount: numericAmount,
+      unit: normalizedUnit,
+      data_source: 'openai'
+    };
+
+    NUTRIENT_FIELDS.forEach((field) => {
+      estimate[field] = safeRound(Number(result?.[field]));
+    });
+
+    return cacheEstimate(cacheKey, estimate);
+  } catch (error) {
+    console.warn('OpenAI ingredient estimate request failed. Using fallback data.', error);
+    return cacheEstimate(
+      cacheKey,
+      fallbackEstimate({ ingredientName: normalizedName, amount: numericAmount, unit: normalizedUnit })
+    );
   }
-
-  const grams = gramsFromServing(safeAmount, normalizedUnit, detail) || referenceGrams || safeAmount;
-  const nutrients = scaleNutrients(perGram, grams);
-
-  return cacheEstimate(cacheKey, {
-    name: detail.description ? titleCase(detail.description) : ingredientName || 'Ingredient',
-    amount: safeAmount,
-    unit: normalizedUnit,
-    ...nutrients
-  });
 }
 
 function parseImageDataUrl(dataUrl) {
@@ -973,7 +887,7 @@ exports.handler = async function handler(event) {
       const { type = 'suggestions' } = payload;
 
       if (type === 'estimate') {
-        const { ingredientName, amount, unit, fdcId } = payload;
+        const { ingredientName, amount, unit, suggestionId } = payload;
 
         if (!ingredientName || typeof ingredientName !== 'string') {
           return jsonResponse(400, { error: 'ingredientName is required.' });
@@ -988,18 +902,18 @@ exports.handler = async function handler(event) {
           return jsonResponse(400, { error: 'amount must be a positive number.' });
         }
 
-        const estimate = await estimateIngredientWithUsda({
+        const estimate = await estimateIngredientWithOpenAi({
           ingredientName,
           amount: numericAmount,
           unit,
-          fdcId
+          suggestionId
         });
 
         return jsonResponse(200, { data: estimate });
       }
 
       const { query = '' } = payload;
-      const suggestions = await fetchUsdaSuggestions(query);
+      const suggestions = await fetchAiSuggestions(query);
       return jsonResponse(200, { data: suggestions });
     } catch (error) {
       console.error('Failed to provide ingredient suggestions via Netlify function:', error);

@@ -44,8 +44,8 @@ export async function fetchIngredientSuggestions(query) {
   return Array.isArray(result?.suggestions) ? result.suggestions : [];
 }
 
-export async function estimateIngredientNutrition({ ingredientName, amount, unit, fdcId }) {
-  const payload = { type: 'estimate', ingredientName, amount, unit, fdcId };
+export async function estimateIngredientNutrition({ ingredientName, amount, unit, suggestionId }) {
+  const payload = { type: 'estimate', ingredientName, amount, unit, suggestionId };
   const result = await postJson('/ingredient-suggestions', payload);
   return result || null;
 }
