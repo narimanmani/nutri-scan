@@ -1,15 +1,207 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { resolveWgerAssetUrl } from '@/utils/wgerAssets.js';
 
 const BASE_SILHOUETTES = {
-  front: 'https://wger.de/static/images/muscles/muscular_system_front.svg',
-  back: 'https://wger.de/static/images/muscles/muscular_system_back.svg',
+  front: resolveWgerAssetUrl('/static/images/muscles/muscular_system_front.svg'),
+  back: resolveWgerAssetUrl('/static/images/muscles/muscular_system_back.svg'),
 };
+
+const overlaySvgCache = new Map();
 
 function buildOverlayStyle(opacity = 0) {
   return {
     opacity,
     visibility: opacity > 0 ? 'visible' : 'hidden',
   };
+}
+
+function useInlineSvg(url) {
+  const [markup, setMarkup] = useState(() => (url ? overlaySvgCache.get(url) || '' : ''));
+
+  useEffect(() => {
+    if (!url || !/\.svg(?:\?|#|$)/i.test(url)) {
+      setMarkup('');
+      return;
+    }
+
+    if (overlaySvgCache.has(url)) {
+      setMarkup(overlaySvgCache.get(url) || '');
+      return;
+    }
+
+    let isActive = true;
+
+    fetch(url)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Failed to fetch overlay: ${response.status}`);
+        }
+        return response.text();
+      })
+      .then((text) => {
+        if (!isActive) return;
+        overlaySvgCache.set(url, text);
+        setMarkup(text);
+      })
+      .catch(() => {
+        if (!isActive) return;
+        setMarkup('');
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [url]);
+
+  return markup;
+}
+
+function useSvgInteraction({
+  containerRef,
+  markup,
+  label,
+  isSelected,
+  onPointerEnter,
+  onPointerLeave,
+  onToggle,
+}) {
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const svg = container.querySelector('svg');
+    if (!svg) return;
+
+    svg.setAttribute('focusable', 'true');
+    svg.setAttribute('tabindex', '0');
+    svg.setAttribute('role', 'button');
+    svg.setAttribute('aria-label', `${isSelected ? 'Deselect' : 'Select'} ${label}`);
+    svg.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    svg.style.width = '100%';
+    svg.style.height = '100%';
+    svg.style.cursor = 'pointer';
+    svg.style.pointerEvents = 'visiblePainted';
+    svg.style.outline = 'none';
+
+    const normalizePaintAttributes = (node) => {
+      if (!node) return;
+
+      const shouldReplace = (value) => {
+        if (!value) return false;
+        const normalized = value.trim().toLowerCase();
+        if (!normalized || normalized === 'none' || normalized === 'transparent') {
+          return false;
+        }
+
+        // Patterns like url(#gradient) should retain their original paint.
+        if (normalized.startsWith('url(')) {
+          return false;
+        }
+
+        return true;
+      };
+
+      node.querySelectorAll('[fill]').forEach((el) => {
+        const fillValue = el.getAttribute('fill');
+        if (!shouldReplace(fillValue)) {
+          return;
+        }
+        el.setAttribute('fill', 'currentColor');
+      });
+
+      node.querySelectorAll('[stroke]').forEach((el) => {
+        const strokeValue = el.getAttribute('stroke');
+        if (!shouldReplace(strokeValue)) {
+          return;
+        }
+        el.setAttribute('stroke', 'currentColor');
+      });
+    };
+
+    normalizePaintAttributes(svg);
+
+    const handlePointerEnter = (event) => {
+      event.stopPropagation();
+      onPointerEnter?.();
+    };
+
+    const handlePointerLeave = (event) => {
+      event.stopPropagation();
+      onPointerLeave?.();
+    };
+
+    const handleClick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onToggle?.();
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        onToggle?.();
+      }
+    };
+
+    const handleFocus = () => {
+      onPointerEnter?.();
+    };
+
+    const handleBlur = () => {
+      onPointerLeave?.();
+    };
+
+    svg.addEventListener('pointerenter', handlePointerEnter);
+    svg.addEventListener('pointerleave', handlePointerLeave);
+    svg.addEventListener('click', handleClick);
+    svg.addEventListener('keydown', handleKeyDown);
+    svg.addEventListener('focus', handleFocus);
+    svg.addEventListener('blur', handleBlur);
+
+    return () => {
+      svg.removeEventListener('pointerenter', handlePointerEnter);
+      svg.removeEventListener('pointerleave', handlePointerLeave);
+      svg.removeEventListener('click', handleClick);
+      svg.removeEventListener('keydown', handleKeyDown);
+      svg.removeEventListener('focus', handleFocus);
+      svg.removeEventListener('blur', handleBlur);
+    };
+  }, [containerRef, markup, label, isSelected, onPointerEnter, onPointerLeave, onToggle]);
+}
+
+function MuscleHitRegion({
+  highlight,
+  label,
+  isSelected,
+  onPointerEnter,
+  onPointerLeave,
+  onToggle,
+}) {
+  const containerRef = useRef(null);
+  const markup = useInlineSvg(highlight);
+
+  useSvgInteraction({
+    containerRef,
+    markup,
+    label,
+    isSelected,
+    onPointerEnter,
+    onPointerLeave,
+    onToggle,
+  });
+
+  if (!markup) {
+    return null;
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute inset-0 opacity-0"
+      dangerouslySetInnerHTML={{ __html: markup }}
+    />
+  );
 }
 
 function getStatusCopy(status, error) {
@@ -106,33 +298,14 @@ export default function MuscleSelector({
               title={muscle.label}
               className="absolute inset-0"
             >
-              <button
-                type="button"
-                aria-pressed={isSelected}
-                className="absolute inset-0"
-                onClick={() => onToggle?.(muscle)}
+              <MuscleHitRegion
+                highlight={highlight}
+                label={muscle.label}
+                isSelected={isSelected}
                 onPointerEnter={() => setHoveredId(muscle.id)}
                 onPointerLeave={() => setHoveredId(null)}
-                onFocus={() => setHoveredId(muscle.id)}
-                onBlur={() => setHoveredId(null)}
-                style={{
-                  WebkitMaskImage: `url(${highlight})`,
-                  maskImage: `url(${highlight})`,
-                  WebkitMaskRepeat: 'no-repeat',
-                  maskRepeat: 'no-repeat',
-                  WebkitMaskSize: 'contain',
-                  maskSize: 'contain',
-                  WebkitMaskPosition: 'center',
-                  maskPosition: 'center',
-                  backgroundColor: isSelected
-                    ? 'rgba(16, 185, 129, 0.18)'
-                    : 'rgba(16, 185, 129, 0.12)',
-                  transition: 'background-color 150ms ease, opacity 150ms ease',
-                  opacity: isSelected || isHovered ? 1 : 0,
-                }}
-              >
-                <span className="sr-only">{`${isSelected ? 'Deselect' : 'Select'} ${muscle.label}`}</span>
-              </button>
+                onToggle={() => onToggle?.(muscle)}
+              />
               <img
                 aria-hidden="true"
                 src={highlight}

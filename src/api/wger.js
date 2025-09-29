@@ -1,4 +1,5 @@
 import { generateExerciseInsights, generateSectionOverview } from '@/api/openai.js';
+import { resolveWgerAssetUrl } from '@/utils/wgerAssets.js';
 
 const BASE_URL = 'https://wger.de/api/v2';
 const BASE_HOST = BASE_URL.replace(/\/?api\/v2\/?$/, '');
@@ -170,18 +171,13 @@ async function fetchJson(url, options = {}) {
 
 function toAbsoluteAssetUrl(url = '') {
   if (!url) return '';
-
-  if (/^https?:\/\//i.test(url)) {
-    return url;
-  }
-
-  if (url.startsWith('//')) {
-    return `https:${url}`;
+  if (/^https?:\/\//i.test(url) || url.startsWith('//')) {
+    return resolveWgerAssetUrl(url);
   }
 
   const normalizedBase = BASE_HOST.replace(/\/$/, '');
   const normalizedPath = url.startsWith('/') ? url : `/${url}`;
-  return `${normalizedBase}${normalizedPath}`;
+  return resolveWgerAssetUrl(`${normalizedBase}${normalizedPath}`);
 }
 
 function slugify(value = '') {
