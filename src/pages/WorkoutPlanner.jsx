@@ -214,7 +214,7 @@ export default function WorkoutPlanner() {
         </p>
       </header>
 
-      <section className="grid gap-8 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+      <section className="space-y-8">
         <div className="space-y-6 rounded-3xl border border-emerald-100 bg-white/70 p-6 shadow-lg shadow-emerald-100/60 backdrop-blur">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-semibold text-emerald-900">Anatomy Explorer</h2>
@@ -244,7 +244,7 @@ export default function WorkoutPlanner() {
           />
         </div>
 
-        <div className="flex flex-col gap-6">
+        <div className="space-y-6">
           <div className="rounded-3xl border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-emerald-100 p-6 shadow-lg shadow-emerald-100/70">
             <div className="flex items-start justify-between gap-4">
               <h2 className="text-xl font-semibold text-emerald-900">Your Focus Areas</h2>
@@ -305,14 +305,14 @@ export default function WorkoutPlanner() {
         </div>
       </section>
 
-        <section className="space-y-5">
-          <div>
-            <h2 className="text-2xl font-semibold text-emerald-950">Workout plan</h2>
-            <p className="text-sm text-emerald-900/70">
-              Each block pulls movements from the wger database and layers on GPT-powered programming so you know how to execute
-              every rep with confidence.
-            </p>
-          </div>
+      <section className="space-y-5">
+        <div>
+          <h2 className="text-2xl font-semibold text-emerald-950">Workout plan</h2>
+          <p className="text-sm text-emerald-900/70">
+            Each block pulls movements from the wger database and layers on GPT-powered programming so you know how to execute
+            every rep with confidence.
+          </p>
+        </div>
 
         {isGenerating && (
           <div className="rounded-3xl border border-emerald-100 bg-white/80 p-6 text-sm text-emerald-800/80 shadow-inner">
