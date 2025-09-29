@@ -99,6 +99,14 @@ export default defineConfig(({ command }) => ({
   plugins: command === 'serve' ? [react(), createNetlifyFunctionProxyPlugin()] : [react()],
   server: {
     allowedHosts: true,
+    proxy: {
+      '/wger': {
+        target: 'https://wger.de',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/wger/, ''),
+      },
+    },
   },
   resolve: {
     alias: {
