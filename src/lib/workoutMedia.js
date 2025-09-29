@@ -35,6 +35,9 @@ const TOKEN_NORMALIZATIONS = new Map([
   ['glutes', 'glute'],
   ['triceps', 'tricep'],
   ['biceps', 'bicep'],
+  ['calf', 'calf'],
+  ['calve', 'calf'],
+  ['calves', 'calf'],
 ]);
 
 const DESCRIPTOR_TOKENS = new Set([
@@ -84,6 +87,17 @@ const DESCRIPTOR_TOKENS = new Set([
 ]);
 
 const FUZZY_SCORE_THRESHOLD = 0.28;
+
+const GENERIC_EXERCISE_TOKENS = new Set([
+  'exercise',
+  'exercises',
+  'movement',
+  'movements',
+  'drill',
+  'drills',
+  'workout',
+  'workouts',
+]);
 
 const gifModules = import.meta.glob('../workout/Images/*.{gif,GIF}', {
   eager: true,
@@ -315,7 +329,7 @@ function createSuggestion(entry, score) {
   };
 }
 
-function createMatch(entry, { strategy, score, query }) {
+function createMatch(entry, { strategy, score, query, confidence = 'high', suggestion = null }) {
   if (!entry) {
     return null;
   }
@@ -331,7 +345,8 @@ function createMatch(entry, { strategy, score, query }) {
     descriptors: entry.descriptors,
     tokens: entry.coreTokens,
     query,
-    suggestion: null,
+    confidence: confidence === 'low' ? 'low' : 'high',
+    suggestion: suggestion && suggestion.fileName ? suggestion : null,
   };
 }
 
@@ -348,7 +363,40 @@ function createUnmatched({ reason, query, suggestion, score }) {
     tokens: [],
     query,
     suggestion: suggestion || null,
+    confidence: 'none',
   };
+}
+
+const GENERIC_EXERCISE_PATTERN = /^exercise\s*\d*$/i;
+
+function hasMeaningfulTokens(tokens) {
+  if (!Array.isArray(tokens) || tokens.length === 0) {
+    return false;
+  }
+
+  return tokens.some((token) => {
+    if (!token) return false;
+    if (GENERIC_EXERCISE_TOKENS.has(token)) return false;
+    if (/^\d+$/.test(token)) return false;
+    return true;
+  });
+}
+
+function isLowSignalQuery({ name, tokens, coreTokens }) {
+  const normalizedName = typeof name === 'string' ? name.trim() : '';
+  if (!normalizedName) {
+    return true;
+  }
+
+  if (GENERIC_EXERCISE_PATTERN.test(normalizedName)) {
+    return true;
+  }
+
+  if (hasMeaningfulTokens(coreTokens)) {
+    return false;
+  }
+
+  return !hasMeaningfulTokens(tokens);
 }
 
 function chooseBestEntry(candidates, preferences) {
@@ -516,8 +564,21 @@ export function findExerciseAnimation(name) {
     }
   }
 
-  if (bestEntry && bestScore >= FUZZY_SCORE_THRESHOLD) {
-    return createMatch(bestEntry, { strategy: 'fuzzy', score: bestScore, query });
+  if (bestEntry) {
+    if (bestScore >= FUZZY_SCORE_THRESHOLD) {
+      return createMatch(bestEntry, { strategy: 'fuzzy', score: bestScore, query });
+    }
+
+    if (isLowSignalQuery({ name, tokens: nameTokens, coreTokens: nameCoreTokens })) {
+      const suggestion = createSuggestion(bestEntry, bestScore);
+      return createMatch(bestEntry, {
+        strategy: 'fuzzy-low',
+        score: bestScore,
+        query,
+        confidence: 'low',
+        suggestion,
+      });
+    }
   }
 
   const suggestion = createSuggestion(bestEntry, bestScore);
