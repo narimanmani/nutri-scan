@@ -337,11 +337,16 @@ export default function WorkoutPlanner() {
                       const benefits = sanitizeList(exercise.benefits);
                       const photoUrls = sanitizeList(exercise.photoUrls);
                       const safetyNotes = sanitizeText(exercise.safetyNotes);
+                      const difficulty = sanitizeText(exercise.difficulty);
+                      const librarySteps = sanitizeList(exercise.librarySteps);
+                      const libraryNotes = sanitizeList(exercise.libraryNotes);
 
                       const hasPrescription = prescriptionDetails.length > 0;
                       const hasCues = cues.length > 0;
                       const hasBenefits = benefits.length > 0;
                       const hasPhotos = photoUrls.length > 0;
+                      const hasLibrarySteps = librarySteps.length > 0;
+                      const hasLibraryNotes = libraryNotes.length > 0;
 
                       return (
                         <li
@@ -355,6 +360,14 @@ export default function WorkoutPlanner() {
                             ) : (
                               <p className="mt-1 text-xs italic text-emerald-800/60">
                                 Detailed instructions will appear once AI guidance loads for this exercise.
+                              </p>
+                            )}
+                            {difficulty && (
+                              <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.25em] text-emerald-500">
+                                Library difficulty{' '}
+                                <span className="ml-1 font-medium normal-case tracking-normal text-emerald-800/80">
+                                  {difficulty}
+                                </span>
                               </p>
                             )}
                             {exercise.detailError && (
@@ -411,20 +424,58 @@ export default function WorkoutPlanner() {
                             </p>
                           )}
 
-                          {hasPhotos && (
+                          {hasLibrarySteps && (
                             <div>
                               <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-500">
-                                Reference photos
+                                Library steps
                               </p>
-                              <ul className="mt-2 space-y-1 text-xs text-emerald-700 underline decoration-emerald-300 underline-offset-2">
-                                {photoUrls.map((url, index) => (
-                                  <li key={`${exercise.id}-video-${index}`}>
-                                    <a href={url} target="_blank" rel="noopener noreferrer" className="hover:text-emerald-900">
-                                      {`View photo ${index + 1}`}
-                                    </a>
+                              <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs text-emerald-800/80">
+                                {librarySteps.map((step, index) => (
+                                  <li key={`${exercise.id}-library-step-${index}`}>{step}</li>
+                                ))}
+                              </ol>
+                            </div>
+                          )}
+
+                          {hasLibraryNotes && (
+                            <div>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-500">
+                                Library tips
+                              </p>
+                              <ul className="mt-2 space-y-1 text-xs text-emerald-800/75">
+                                {libraryNotes.map((note, index) => (
+                                  <li key={`${exercise.id}-library-note-${index}`} className="flex gap-2">
+                                    <span className="mt-2 h-1.5 w-1.5 flex-none rounded-full bg-emerald-200" aria-hidden="true" />
+                                    <span>{note}</span>
                                   </li>
                                 ))}
                               </ul>
+                            </div>
+                          )}
+
+                          {hasPhotos && (
+                            <div>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-500">
+                                Exercise visuals
+                              </p>
+                              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                {photoUrls.map((url, index) => (
+                                  <a
+                                    key={`${exercise.id}-visual-${index}`}
+                                    href={url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="group relative block overflow-hidden rounded-xl border border-emerald-100 bg-white/70"
+                                  >
+                                    <img
+                                      src={url}
+                                      alt={`${exercise.name} demonstration ${index + 1}`}
+                                      loading="lazy"
+                                      className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.015]"
+                                    />
+                                  </a>
+                                ))}
+                              </div>
                             </div>
                           )}
                         </li>
