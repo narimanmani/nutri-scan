@@ -1,4 +1,5 @@
 import { generateExerciseInsights, generateSectionOverview } from '@/api/openai.js';
+import { findExerciseAnimation } from '@/lib/workoutMedia.js';
 
 const BASE_URL = 'https://wger.de/api/v2';
 const BASE_HOST = BASE_URL.replace(/\/?api\/v2\/?$/, '');
@@ -153,6 +154,7 @@ export async function generateWorkoutPlanFromMuscles(
       const enrichedExercises = await Promise.all(
         selectedExercises.map(async (exercise) => {
           const name = exercise?.name || `Exercise ${exercise?.id || ''}`.trim();
+          const animation = findExerciseAnimation(name);
 
           try {
             const insights = await generateExerciseInsights({
@@ -164,6 +166,8 @@ export async function generateWorkoutPlanFromMuscles(
             return {
               ...exercise,
               name,
+              animationUrl: animation?.src || '',
+              animationAlt: animation?.alt || `${name} demonstration`,
               description: insights.description || exercise.description || '',
               sets: insights.sets,
               reps: insights.reps,
@@ -189,6 +193,8 @@ export async function generateWorkoutPlanFromMuscles(
             return {
               ...exercise,
               name,
+              animationUrl: animation?.src || '',
+              animationAlt: animation?.alt || `${name} demonstration`,
               description: exercise.description || '',
               sets: '',
               reps: '',
