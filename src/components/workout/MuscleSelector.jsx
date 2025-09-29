@@ -1,9 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-
-const BASE_SILHOUETTES = {
-  front: 'https://wger.de/static/images/muscles/muscular_system_front.svg',
-  back: 'https://wger.de/static/images/muscles/muscular_system_back.svg',
-};
+import { getSilhouetteAsset } from '@/utils/wgerAssets.js';
 
 function buildOverlayStyle(opacity = 0) {
   return {
@@ -56,7 +52,7 @@ export default function MuscleSelector({
     return null;
   }, [hoveredId, musclesForView, normalizedSelectedIds]);
 
-  const baseImage = BASE_SILHOUETTES[view];
+  const baseImage = getSilhouetteAsset(view);
   const statusCopy = getStatusCopy(status, error);
 
   return (
