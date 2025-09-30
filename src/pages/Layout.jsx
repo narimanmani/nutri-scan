@@ -104,14 +104,19 @@ export default function Layout({ children, currentPageName }) {
             <SidebarGroup>
               <SidebarGroupContent>
                 <SidebarMenu className="space-y-2">
-                  {navigationItems.map((item) => (
+                  {navigationItems.map((item) => {
+                    const normalizedPathname = location.pathname.toLowerCase();
+                    const normalizedTarget = item.url.toLowerCase();
+                    const isActive =
+                      normalizedPathname === normalizedTarget ||
+                      normalizedPathname.startsWith(`${normalizedTarget}/`);
+
+                    return (
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton
                         asChild
                         className={`hover:bg-emerald-50 hover:text-emerald-700 transition-all duration-300 rounded-xl h-12 ${
-                          location.pathname.toLowerCase().startsWith(item.url.toLowerCase())
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
-                            : ''
+                          isActive ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : ''
                         }`}
                       >
                         <Link to={item.url} className="flex items-center gap-4 px-4 py-3">
@@ -120,7 +125,8 @@ export default function Layout({ children, currentPageName }) {
                         </Link>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
-                  ))}
+                  );
+                  })}
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
