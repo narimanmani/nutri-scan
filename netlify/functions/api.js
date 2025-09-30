@@ -1,9 +1,14 @@
 const { getStore } = require('@netlify/blobs');
+const crypto = require('crypto');
 
 const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 20000);
+const OPENAI_ANALYSIS_TIMEOUT_MS = Number(
+  process.env.OPENAI_ANALYSIS_TIMEOUT_MS || Math.max(OPENAI_REQUEST_TIMEOUT_MS, 25000)
+);
 
 const suggestionCache = new Map();
 const estimateCache = new Map();
+const analysisCache = new Map();
 
 const USDA_API_KEY = process.env.USDA_API_KEY || process.env.FDC_API_KEY || '';
 const USDA_API_URL = process.env.USDA_API_URL || 'https://api.nal.usda.gov/fdc/v1';
@@ -476,6 +481,32 @@ function cacheEstimate(signature, payload) {
 
 function getCachedEstimate(signature) {
   return signature ? estimateCache.get(signature) : undefined;
+}
+
+function cacheAnalysis(signature, payload) {
+  if (!signature) {
+    return payload;
+  }
+
+  analysisCache.set(signature, payload);
+  return payload;
+}
+
+function getCachedAnalysis(signature) {
+  return signature ? analysisCache.get(signature) : undefined;
+}
+
+function hashImageDataUrl(imageDataUrl) {
+  if (typeof imageDataUrl !== 'string' || imageDataUrl.length === 0) {
+    return null;
+  }
+
+  try {
+    return crypto.createHash('sha1').update(imageDataUrl).digest('hex');
+  } catch (error) {
+    console.warn('Failed to hash image data URL for analysis cache.', error);
+    return null;
+  }
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = OPENAI_REQUEST_TIMEOUT_MS) {
@@ -958,60 +989,85 @@ async function storeMealPhoto(imageDataUrl) {
 }
 
 async function analyzeWithOpenAI({ imageDataUrl }) {
+  const cacheKey = hashImageDataUrl(imageDataUrl);
+  const cached = getCachedAnalysis(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const fallback = ensureNumbers(MOCK_RESPONSE);
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
     console.warn('OPENAI_API_KEY is not configured. Using mock analysis response.');
-    return ensureNumbers(MOCK_RESPONSE);
+    return cacheAnalysis(cacheKey, fallback);
   }
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are a registered dietitian that analyses meals from photos and provides complete nutritional breakdowns.'
-        },
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: 'Analyze this food image and return a detailed nutritional estimate. Use realistic portion sizes.'
-            },
-            {
-              type: 'image_url',
-              image_url: {
-                url: imageDataUrl
-              }
+  const payload = {
+    model: 'gpt-4o',
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You are a registered dietitian that analyses meals from photos and provides complete nutritional breakdowns.'
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: 'Analyze this food image and return a detailed nutritional estimate. Use realistic portion sizes.'
+          },
+          {
+            type: 'image_url',
+            image_url: {
+              url: imageDataUrl
             }
-          ]
-        }
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: ANALYSIS_SCHEMA
+          }
+        ]
       }
-    })
-  });
+    ],
+    response_format: {
+      type: 'json_schema',
+      json_schema: ANALYSIS_SCHEMA
+    }
+  };
+
+  let response;
+  try {
+    response = await fetchWithTimeout(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(payload)
+      },
+      OPENAI_ANALYSIS_TIMEOUT_MS
+    );
+  } catch (error) {
+    console.error('OpenAI meal analysis request failed.', error);
+    return cacheAnalysis(cacheKey, fallback);
+  }
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || 'The OpenAI API returned an unexpected error.');
+    console.error('OpenAI meal analysis responded with an error.', error);
+    return cacheAnalysis(cacheKey, fallback);
   }
 
-  const data = await response.json();
+  const data = await response.json().catch((error) => {
+    console.error('Failed to parse OpenAI analysis response JSON.', error);
+    return null;
+  });
+
   const content = data?.choices?.[0]?.message?.content;
 
   if (!content) {
-    throw new Error('The OpenAI API did not return any analysis content.');
+    console.warn('The OpenAI API did not return any analysis content. Falling back to cached data.');
+    return cacheAnalysis(cacheKey, fallback);
   }
 
   let parsed;
@@ -1019,10 +1075,10 @@ async function analyzeWithOpenAI({ imageDataUrl }) {
     parsed = JSON.parse(content);
   } catch (error) {
     console.error('Failed to parse OpenAI response, falling back to mock data.', error);
-    return ensureNumbers(MOCK_RESPONSE);
+    return cacheAnalysis(cacheKey, fallback);
   }
 
-  return ensureNumbers(parsed);
+  return cacheAnalysis(cacheKey, ensureNumbers(parsed));
 }
 
 function jsonResponse(statusCode, body) {

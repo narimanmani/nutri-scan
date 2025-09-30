@@ -20,6 +20,9 @@ A Vite + React application that analyzes meal photos using OpenAI GPT-4o and kee
    `VITE_OPENAI_API_KEY` enables the in-browser fallback without running Netlify locally.
    ```env
    OPENAI_API_KEY=sk-your-key
+   # Optional: override request timeouts (ms) for OpenAI calls
+   # OPENAI_REQUEST_TIMEOUT_MS=15000
+   # OPENAI_ANALYSIS_TIMEOUT_MS=30000
    # Optionally override the smaller models used for typeahead + nutrition fills
    # OPENAI_SUGGESTION_MODEL=gpt-4o-mini
    # OPENAI_NUTRITION_MODEL=gpt-4o-mini
@@ -49,7 +52,7 @@ npm run build
 
 ## How It Works
 
-- **Image analysis**: The upload flow converts photos to base64 data URLs and proxies them through a Netlify function that invokes OpenAI GPT-4o (vision + text) for calorie and macronutrient estimates.
+- **Image analysis**: The upload flow converts photos to base64 data URLs and proxies them through a Netlify function that invokes OpenAI GPT-4o (vision + text) for calorie and macronutrient estimates with aggressive caching and configurable timeouts to reduce first-call stalls.
 - **Storage**: Meals are stored in `src/data/meals.json` and synchronized to `localStorage` so the app behaves like an offline JSON database in the browser.
 - **Ingredient suggestions**: Ingredient lookups and per-ingredient calorie estimates are proxied through the Netlify function to the OpenAI API for contextual results. When the key is missing or OpenAI cannot be reached, the UI falls back to a curated set of common foods with per-gram nutrition data.
 - **Mock mode**: When no API keys are configured, realistic mock responses are returned so the experience can be demonstrated without external calls.
