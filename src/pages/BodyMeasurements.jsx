@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { getSilhouetteAsset } from "@/utils/wgerAssets.js";
 import {
   DEFAULT_MEASUREMENT_FIELDS,
+  getDefaultMeasurementPositions,
   loadMeasurementPositions,
   mergeFieldsWithPositions,
 } from "@/utils/bodyMeasurementLayout.js";
@@ -55,6 +56,12 @@ export default function BodyMeasurements() {
     const storedPositions = loadMeasurementPositions();
     if (storedPositions) {
       setPositions(storedPositions);
+      return;
+    }
+
+    const defaults = getDefaultMeasurementPositions();
+    if (defaults) {
+      setPositions(defaults);
     }
   }, []);
 

@@ -3,9 +3,11 @@ import { getSilhouetteAsset } from "@/utils/wgerAssets.js";
 import {
   DEFAULT_MEASUREMENT_FIELDS,
   clearMeasurementPositions,
-  createDefaultMeasurementPositions,
+  getDefaultMeasurementPositions,
+  loadDefaultMeasurementOverride,
   loadMeasurementPositions,
   mergeFieldsWithPositions,
+  saveDefaultMeasurementPositions,
   saveMeasurementPositions,
 } from "@/utils/bodyMeasurementLayout.js";
 
@@ -16,7 +18,7 @@ function clamp(value, min, max) {
 export default function BodyMeasurementsAdmin() {
   const [positions, setPositions] = useState(() => {
     const stored = loadMeasurementPositions();
-    return stored || createDefaultMeasurementPositions();
+    return stored || getDefaultMeasurementPositions();
   });
   const [selectedFieldId, setSelectedFieldId] = useState(DEFAULT_MEASUREMENT_FIELDS[0].id);
   const [isDirty, setIsDirty] = useState(false);
@@ -24,6 +26,7 @@ export default function BodyMeasurementsAdmin() {
   const [dragState, setDragState] = useState(null);
   const svgRef = useRef(null);
   const baseImage = useMemo(() => getSilhouetteAsset("front"), []);
+  const [hasCustomDefault, setHasCustomDefault] = useState(() => Boolean(loadDefaultMeasurementOverride()));
 
   const measurementFields = useMemo(
     () => mergeFieldsWithPositions(DEFAULT_MEASUREMENT_FIELDS, positions),
@@ -126,11 +129,21 @@ export default function BodyMeasurementsAdmin() {
   };
 
   const handleReset = () => {
-    const defaults = createDefaultMeasurementPositions();
+    const defaults = getDefaultMeasurementPositions();
     clearMeasurementPositions();
     setPositions(defaults);
     setIsDirty(false);
-    setStatusMessage("Guides reset to default positions.");
+    setStatusMessage(
+      hasCustomDefault ? "Guides reset to your saved default layout." : "Guides reset to default positions."
+    );
+  };
+
+  const handleSaveAsDefault = () => {
+    saveDefaultMeasurementPositions(positions);
+    saveMeasurementPositions(positions);
+    setHasCustomDefault(true);
+    setIsDirty(false);
+    setStatusMessage("Current layout saved as the new default for this device.");
   };
 
   return (
@@ -191,26 +204,39 @@ export default function BodyMeasurementsAdmin() {
                 Drag the origin dot (solid) or the label anchor (hollow) to reposition.
               </p>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={handleReset}
-                className="rounded-full border border-emerald-200 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-wide text-emerald-600 hover:border-emerald-300 hover:text-emerald-700"
-              >
-                Reset to defaults
-              </button>
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={!isDirty}
-                className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-wide shadow-sm transition-colors ${
-                  isDirty
-                    ? "bg-emerald-500 text-white hover:bg-emerald-600"
-                    : "bg-emerald-200 text-emerald-700 cursor-not-allowed"
-                }`}
-              >
-                Save changes
-              </button>
+            <div className="flex flex-col items-start gap-2 sm:items-end">
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  className="rounded-full border border-emerald-200 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-wide text-emerald-600 hover:border-emerald-300 hover:text-emerald-700"
+                >
+                  Reset to defaults
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveAsDefault}
+                  className="rounded-full border border-emerald-300 bg-emerald-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-emerald-800 transition-colors hover:border-emerald-400 hover:bg-emerald-200/80 hover:text-emerald-900"
+                >
+                  Save as new default
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={!isDirty}
+                  className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-wide shadow-sm transition-colors ${
+                    isDirty
+                      ? "bg-emerald-500 text-white hover:bg-emerald-600"
+                      : "bg-emerald-200 text-emerald-700 cursor-not-allowed"
+                  }`}
+                >
+                  Save changes
+                </button>
+              </div>
+              <p className="text-xs text-emerald-800/70 sm:text-right">
+                Saved defaults live in this device&apos;s browser storage, so they persist across app updates and redeployments
+                unless the local data is cleared.
+              </p>
             </div>
           </div>
 
