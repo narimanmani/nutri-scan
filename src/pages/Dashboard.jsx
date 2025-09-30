@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Meal } from "@/api/entities";
 import { format, isSameDay, startOfDay } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Camera, TrendingUp, Target, Activity, Flame } from "lucide-react";
 import { buildDashboardStats } from "@/utils/stats";
@@ -13,26 +13,48 @@ import NutritionChart from "../components/dashboard/NutritionChart";
 import RecentMeals from "../components/dashboard/RecentMeals";
 import CalorieProgress from "../components/dashboard/CalorieProgress";
 import DateNavigator from "../components/dashboard/DateNavigator";
+import MealDetailsDialog from "@/components/meals/MealDetailsDialog";
 
 export default function Dashboard() {
   const [meals, setMeals] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(() => startOfDay(new Date()));
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [selectedMeal, setSelectedMeal] = useState(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
-    loadMeals();
-  }, []);
+    let isMounted = true;
 
-  const loadMeals = async () => {
-    setIsLoading(true);
-    try {
-      const allMeals = await Meal.list("-created_date", 50);
-      setMeals(allMeals);
-    } catch (error) {
-      console.error("Error loading meals:", error);
-    }
-    setIsLoading(false);
-  };
+    const handleSnapshot = (snapshot) => {
+      if (!isMounted || !Array.isArray(snapshot)) {
+        return;
+      }
+
+      const sorted = Array.from(snapshot).sort((a, b) => {
+        const aTime = new Date(a.meal_date || a.created_date || 0).getTime();
+        const bTime = new Date(b.meal_date || b.created_date || 0).getTime();
+        return bTime - aTime;
+      });
+
+      setMeals((previous) => {
+        if (previous.length === sorted.length && previous.every((meal, index) => meal === sorted[index])) {
+          return previous;
+        }
+        return sorted;
+      });
+      setIsLoading(false);
+    };
+
+    const unsubscribe = Meal.subscribe(handleSnapshot, { immediate: true });
+
+    return () => {
+      isMounted = false;
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
+  }, []);
 
   const dashboardStats = useMemo(() => buildDashboardStats(meals, selectedDate), [meals, selectedDate]);
 
@@ -50,6 +72,30 @@ export default function Dashboard() {
     if (!date) return;
     setSelectedDate(startOfDay(date));
   };
+
+  const handleMealSelect = useCallback((meal) => {
+    if (!meal) {
+      return;
+    }
+
+    setSelectedMeal(meal);
+    setIsDetailsOpen(true);
+  }, []);
+
+  const handleDetailsChange = useCallback((nextOpen) => {
+    setIsDetailsOpen(nextOpen);
+    if (!nextOpen) {
+      setSelectedMeal(null);
+    }
+  }, []);
+
+  const handleEditMeal = useCallback(
+    (meal) => {
+      if (!meal?.id) return;
+      navigate(`${createPageUrl("History")}/${meal.id}`);
+    },
+    [navigate],
+  );
 
   return (
     <div className="p-4 md:p-8 min-h-screen">
@@ -163,6 +209,7 @@ export default function Dashboard() {
               target={2000}
               meals={selectedDayMeals}
               dateLabel={selectedDayLabel}
+              onSelectMeal={handleMealSelect}
             />
             <NutritionChart meals={selectedDayMeals} isLoading={isLoading} dateLabel={selectedDayLabel} />
           </div>
@@ -173,11 +220,21 @@ export default function Dashboard() {
                 onSelectDate={handleDateSelect}
                 meals={meals}
               />
-              <RecentMeals meals={meals.slice(0, 8)} isLoading={isLoading} />
+              <RecentMeals
+                meals={meals.slice(0, 8)}
+                isLoading={isLoading}
+                onSelectMeal={handleMealSelect}
+              />
             </div>
           </div>
         </div>
       </div>
+      <MealDetailsDialog
+        meal={selectedMeal}
+        open={isDetailsOpen}
+        onOpenChange={handleDetailsChange}
+        onEdit={handleEditMeal}
+      />
     </div>
   );
 }

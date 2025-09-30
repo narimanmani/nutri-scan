@@ -4,9 +4,11 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Target, TrendingUp } from "lucide-react";
 
-export default function CalorieProgress({ current, target, meals, dateLabel = "Today" }) {
-  const percentage = Math.min((current / target) * 100, 100);
-  const remaining = Math.max(target - current, 0);
+export default function CalorieProgress({ current, target, meals, dateLabel = "Today", onSelectMeal }) {
+  const safeCurrent = Math.max(0, Math.round(Number(current) || 0));
+  const safeTarget = Math.max(0, Math.round(Number(target) || 0));
+  const percentage = safeTarget > 0 ? Math.min((safeCurrent / safeTarget) * 100, 100) : safeCurrent > 0 ? 100 : 0;
+  const remaining = safeTarget > 0 ? Math.max(safeTarget - safeCurrent, 0) : 0;
   
   const mealTypeColors = {
     breakfast: "bg-yellow-100 text-yellow-800 border-yellow-200",
@@ -28,7 +30,7 @@ export default function CalorieProgress({ current, target, meals, dateLabel = "T
         <div>
           <div className="flex justify-between items-center mb-3">
             <span className="text-sm font-medium text-gray-700">Calories Consumed</span>
-            <span className="text-sm text-gray-500">{current} / {target}</span>
+            <span className="text-sm text-gray-500">{safeCurrent} / {safeTarget || '—'}</span>
           </div>
           <Progress value={percentage} className="h-3 rounded-full" />
           <div className="flex justify-between items-center mt-2 text-sm">
@@ -46,15 +48,20 @@ export default function CalorieProgress({ current, target, meals, dateLabel = "T
             </h3>
             <div className="space-y-3">
               {meals.map((meal, index) => (
-                <div key={meal.id || index} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                <button
+                  key={meal.id || index}
+                  type="button"
+                  onClick={() => onSelectMeal?.(meal)}
+                  className="flex w-full items-center justify-between rounded-xl bg-gray-50 p-3 text-left transition-colors hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                >
                   <div className="flex items-center gap-3">
                     <Badge className={mealTypeColors[meal.meal_type] || mealTypeColors.snack}>
                       {meal.meal_type}
                     </Badge>
                     <span className="font-medium text-gray-900">{meal.meal_name}</span>
                   </div>
-                  <span className="text-emerald-600 font-semibold">{meal.calories || 0} cal</span>
-                </div>
+                  <span className="text-emerald-600 font-semibold">{Math.round(Number(meal.calories) || 0)} cal</span>
+                </button>
               ))}
             </div>
           </div>
