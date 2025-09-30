@@ -8,6 +8,7 @@ const DIET_PLAN_STORAGE_KEY = 'nutri-scan:diet-plans';
 
 let cachedMeals = null;
 let cachedDietPlans = null;
+const mealListeners = new Set();
 
 const CANONICAL_UNITS = ['g', 'ml', 'oz', 'cup', 'serving'];
 
@@ -225,15 +226,156 @@ function readFromLocalStorage() {
   }
 }
 
+function cloneIngredients(ingredients) {
+  if (!Array.isArray(ingredients)) {
+    return [];
+  }
+
+  return ingredients.map((ingredient) => ({
+    ...(typeof ingredient === 'object' && ingredient !== null ? ingredient : {})
+  }));
+}
+
+function cloneMeal(meal) {
+  if (!meal || typeof meal !== 'object') {
+    return null;
+  }
+
+  return {
+    ...meal,
+    ingredients: cloneIngredients(meal.ingredients)
+  };
+}
+
+function cloneMeals(meals) {
+  if (!Array.isArray(meals)) {
+    return [];
+  }
+
+  return meals.map((meal) => cloneMeal(meal)).filter(Boolean);
+}
+
+function freezeSnapshot(snapshot) {
+  if (!Array.isArray(snapshot)) {
+    return snapshot;
+  }
+
+  snapshot.forEach((meal) => {
+    if (meal && typeof meal === 'object') {
+      Object.freeze(meal);
+    }
+  });
+
+  return Object.freeze(snapshot);
+}
+
+function createMealsSnapshot() {
+  const source = Array.isArray(cachedMeals) ? cachedMeals : [];
+  return freezeSnapshot(cloneMeals(source));
+}
+
+function notifyMealListeners() {
+  const snapshot = createMealsSnapshot();
+
+  mealListeners.forEach((listener) => {
+    try {
+      listener(snapshot);
+    } catch (error) {
+      console.error('An error occurred in a meal listener callback:', error);
+    }
+  });
+}
+
+function prepareMealsForStorage(meals, { stripInlinePhotos = false } = {}) {
+  if (!Array.isArray(meals)) {
+    return [];
+  }
+
+  return meals.map((meal) => {
+    const safeMeal = { ...(typeof meal === 'object' && meal !== null ? meal : {}) };
+
+    if (stripInlinePhotos && typeof safeMeal.photo_url === 'string' && safeMeal.photo_url.startsWith('data:')) {
+      safeMeal.photo_url = '';
+    }
+
+    safeMeal.ingredients = cloneIngredients(safeMeal.ingredients);
+    return safeMeal;
+  });
+}
+
+function isQuotaExceededError(error) {
+  if (!error) {
+    return false;
+  }
+
+  if (error?.name === 'QuotaExceededError') {
+    return true;
+  }
+
+  const message = String(error?.message || '');
+  return message.toLowerCase().includes('quota');
+}
+
 function writeToLocalStorage(meals) {
   if (typeof window === 'undefined') {
     return;
   }
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(meals));
-  } catch (error) {
-    console.warn('Unable to persist meals to localStorage:', error);
+
+  const attempts = [
+    { stripInlinePhotos: false, logFallback: false },
+    { stripInlinePhotos: true, logFallback: true }
+  ];
+
+  for (const attempt of attempts) {
+    try {
+      const payload = JSON.stringify(prepareMealsForStorage(meals, attempt));
+      window.localStorage.setItem(STORAGE_KEY, payload);
+
+      if (attempt.logFallback) {
+        console.warn(
+          'Inline meal photos were removed before saving to keep storage usage within browser limits.'
+        );
+      }
+
+      return;
+    } catch (error) {
+      if (!isQuotaExceededError(error) || attempt.stripInlinePhotos) {
+        console.warn('Unable to persist meals to localStorage:', error);
+        return;
+      }
+    }
   }
+}
+
+function syncCachedMealsFromStorage(rawValue) {
+  if (rawValue === null) {
+    cachedMeals = [];
+    notifyMealListeners();
+    return;
+  }
+
+  if (typeof rawValue !== 'string') {
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    if (Array.isArray(parsed)) {
+      cachedMeals = parsed.map(withDefaults);
+      notifyMealListeners();
+    }
+  } catch (error) {
+    console.warn('Unable to synchronize meals from storage event:', error);
+  }
+}
+
+if (typeof window !== 'undefined' && !window.__nutriScanMealsStorageListener) {
+  window.__nutriScanMealsStorageListener = true;
+  window.addEventListener('storage', (event) => {
+    if (event.key === STORAGE_KEY) {
+      syncCachedMealsFromStorage(event.newValue);
+    }
+  });
 }
 
 function readPlansFromLocalStorage() {
@@ -434,6 +576,29 @@ async function getMeals() {
   return cachedMeals;
 }
 
+export function subscribeToMealChanges(listener, { immediate = false } = {}) {
+  if (typeof listener !== 'function') {
+    return () => {};
+  }
+
+  mealListeners.add(listener);
+
+  if (immediate) {
+    (async () => {
+      try {
+        await getMeals();
+        listener(createMealsSnapshot());
+      } catch (error) {
+        console.error('Unable to deliver the initial meals snapshot to a listener:', error);
+      }
+    })();
+  }
+
+  return () => {
+    mealListeners.delete(listener);
+  };
+}
+
 export async function listMeals(order = '-created_date', limit) {
   const meals = await getMeals();
   const sortValue = typeof order === 'string' && order.length > 0 ? order : '-created_date';
@@ -462,6 +627,7 @@ export async function createMeal(meal) {
   meals.unshift(newMeal);
   cachedMeals = meals;
   writeToLocalStorage(meals);
+  notifyMealListeners();
   return newMeal;
 }
 
@@ -505,12 +671,14 @@ export async function updateMeal(id, updates = {}) {
   meals[index] = updatedMeal;
   cachedMeals = meals;
   writeToLocalStorage(meals);
+  notifyMealListeners();
   return updatedMeal;
 }
 
 export async function clearMeals() {
   cachedMeals = hydrateSeedData();
   writeToLocalStorage(cachedMeals);
+  notifyMealListeners();
   return cachedMeals;
 }
 

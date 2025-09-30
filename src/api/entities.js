@@ -3,6 +3,7 @@ import {
   createMeal,
   getMealById,
   updateMeal,
+  subscribeToMealChanges,
   listDietPlans,
   createDietPlan,
   updateDietPlan,
@@ -15,7 +16,8 @@ export const Meal = {
   list: (order, limit) => listMeals(order, limit),
   create: (meal) => createMeal(meal),
   get: (id) => getMealById(id),
-  update: (id, updates) => updateMeal(id, updates)
+  update: (id, updates) => updateMeal(id, updates),
+  subscribe: (listener, options) => subscribeToMealChanges(listener, options)
 };
 
 export const User = {

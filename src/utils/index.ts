@@ -2,5 +2,5 @@
 
 
 export function createPageUrl(pageName: string) {
-    return '/' + pageName.toLowerCase().replace(/ /g, '-');
+    return `/${pageName.trim().replace(/\s+/g, '-')}`;
 }

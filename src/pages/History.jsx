@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Meal } from "@/api/entities";
 import { format, startOfWeek, endOfWeek, isWithinInterval } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,6 +10,7 @@ import { createPageUrl } from "@/utils";
 
 import MealHistoryCard from "../components/history/MealHistoryCard";
 import HistoryStats from "../components/history/HistoryStats";
+import MealDetailsDialog from "@/components/meals/MealDetailsDialog";
 
 export default function HistoryPage() {
   const [meals, setMeals] = useState([]);
@@ -18,28 +19,43 @@ export default function HistoryPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState("all");
   const [filterPeriod, setFilterPeriod] = useState("all");
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [selectedMeal, setSelectedMeal] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
-    loadMeals();
+    let isMounted = true;
+
+    const handleSnapshot = (snapshot) => {
+      if (!isMounted || !Array.isArray(snapshot)) {
+        return;
+      }
+
+      const sorted = [...snapshot].sort((a, b) => {
+        const aTime = new Date(a.created_date || a.meal_date || 0).getTime();
+        const bTime = new Date(b.created_date || b.meal_date || 0).getTime();
+        return bTime - aTime;
+      });
+
+      setMeals(sorted);
+      setIsLoading(false);
+    };
+
+    const unsubscribe = Meal.subscribe(handleSnapshot, { immediate: true });
+
+    return () => {
+      isMounted = false;
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
   }, []);
 
   useEffect(() => {
     applyFilters();
-  }, [meals, searchTerm, filterType, filterPeriod]);
+  }, [applyFilters]);
 
-  const loadMeals = async () => {
-    setIsLoading(true);
-    try {
-      const data = await Meal.list("-created_date");
-      setMeals(data);
-    } catch (error) {
-      console.error("Error loading meals:", error);
-    }
-    setIsLoading(false);
-  };
-
-  const applyFilters = () => {
+  const applyFilters = useCallback(() => {
     let filtered = [...meals];
 
     // Search filter
@@ -83,7 +99,31 @@ export default function HistoryPage() {
     }
 
     setFilteredMeals(filtered);
-  };
+  }, [filterPeriod, filterType, meals, searchTerm]);
+
+  const handleMealSelect = useCallback((meal) => {
+    if (!meal) {
+      return;
+    }
+
+    setSelectedMeal(meal);
+    setIsDetailsOpen(true);
+  }, []);
+
+  const handleCloseDetails = useCallback((nextOpen) => {
+    setIsDetailsOpen(nextOpen);
+    if (!nextOpen) {
+      setSelectedMeal(null);
+    }
+  }, []);
+
+  const handleEditMeal = useCallback(
+    (meal) => {
+      if (!meal?.id) return;
+      navigate(`${createPageUrl("History")}/${meal.id}`);
+    },
+    [navigate],
+  );
 
   return (
     <div className="p-4 md:p-8 min-h-screen">
@@ -175,12 +215,12 @@ export default function HistoryPage() {
                 <MealHistoryCard
                   key={meal.id}
                   meal={meal}
-                  onSelect={() => navigate(`${createPageUrl("History")}/${meal.id}`)}
+                  onSelect={handleMealSelect}
                 />
               ))
             )}
           </div>
-          
+
           {!isLoading && filteredMeals.length === 0 && (
             <Card className="border-0 shadow-lg rounded-2xl">
               <CardContent className="p-12 text-center">
@@ -194,6 +234,12 @@ export default function HistoryPage() {
           )}
         </div>
       </div>
+      <MealDetailsDialog
+        meal={selectedMeal}
+        open={isDetailsOpen}
+        onOpenChange={handleCloseDetails}
+        onEdit={handleEditMeal}
+      />
     </div>
   );
 }

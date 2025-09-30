@@ -4,10 +4,10 @@ import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
 import { Clock, Camera } from "lucide-react";
 
-export default function RecentMeals({ meals, isLoading }) {
+export default function RecentMeals({ meals, isLoading, onSelectMeal }) {
   const mealTypeColors = {
     breakfast: "bg-yellow-100 text-yellow-800 border-yellow-200",
-    lunch: "bg-blue-100 text-blue-800 border-blue-200", 
+    lunch: "bg-blue-100 text-blue-800 border-blue-200",
     dinner: "bg-purple-100 text-purple-800 border-purple-200",
     snack: "bg-green-100 text-green-800 border-green-200"
   };
@@ -36,25 +36,28 @@ export default function RecentMeals({ meals, isLoading }) {
         ) : meals.length > 0 ? (
           <div className="divide-y divide-gray-100">
             {meals.map((meal) => (
-              <div key={meal.id} className="p-6 hover:bg-gray-50 transition-colors">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
-                    <Camera className="w-5 h-5 text-emerald-600" />
+              <button
+                key={meal.id}
+                type="button"
+                onClick={() => onSelectMeal?.(meal)}
+                className="flex w-full items-center gap-4 p-6 text-left transition-colors hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              >
+                <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <Camera className="w-5 h-5 text-emerald-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="font-medium text-gray-900 truncate">{meal.meal_name}</h3>
+                    <Badge className={mealTypeColors[meal.meal_type] || mealTypeColors.snack}>
+                      {meal.meal_type}
+                    </Badge>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="font-medium text-gray-900 truncate">{meal.meal_name}</h3>
-                      <Badge className={mealTypeColors[meal.meal_type] || mealTypeColors.snack}>
-                        {meal.meal_type}
-                      </Badge>
-                    </div>
-                    <div className="flex items-center gap-4 text-sm text-gray-500">
-                      <span>{format(new Date(meal.meal_date || meal.created_date), 'MMM d')}</span>
-                      <span>{meal.calories || 0} cal</span>
-                    </div>
+                  <div className="flex items-center gap-4 text-sm text-gray-500">
+                    <span>{format(new Date(meal.meal_date || meal.created_date), 'MMM d')}</span>
+                    <span>{meal.calories || 0} cal</span>
                   </div>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         ) : (
