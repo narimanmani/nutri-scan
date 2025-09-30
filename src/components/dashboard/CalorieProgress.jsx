@@ -4,7 +4,7 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Target, TrendingUp } from "lucide-react";
 
-export default function CalorieProgress({ current, target, meals, dateLabel = "Today" }) {
+export default function CalorieProgress({ current, target, meals, dateLabel = "Today", onSelectMeal }) {
   const percentage = Math.min((current / target) * 100, 100);
   const remaining = Math.max(target - current, 0);
   
@@ -46,7 +46,12 @@ export default function CalorieProgress({ current, target, meals, dateLabel = "T
             </h3>
             <div className="space-y-3">
               {meals.map((meal, index) => (
-                <div key={meal.id || index} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                <button
+                  key={meal.id || index}
+                  type="button"
+                  onClick={() => onSelectMeal?.(meal)}
+                  className="flex w-full items-center justify-between rounded-xl bg-gray-50 p-3 text-left transition-colors hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                >
                   <div className="flex items-center gap-3">
                     <Badge className={mealTypeColors[meal.meal_type] || mealTypeColors.snack}>
                       {meal.meal_type}
@@ -54,7 +59,7 @@ export default function CalorieProgress({ current, target, meals, dateLabel = "T
                     <span className="font-medium text-gray-900">{meal.meal_name}</span>
                   </div>
                   <span className="text-emerald-600 font-semibold">{meal.calories || 0} cal</span>
-                </div>
+                </button>
               ))}
             </div>
           </div>

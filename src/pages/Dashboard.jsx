@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Meal } from "@/api/entities";
 import { format, isSameDay, startOfDay } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Camera, TrendingUp, Target, Activity, Flame } from "lucide-react";
 import { buildDashboardStats } from "@/utils/stats";
@@ -13,11 +13,15 @@ import NutritionChart from "../components/dashboard/NutritionChart";
 import RecentMeals from "../components/dashboard/RecentMeals";
 import CalorieProgress from "../components/dashboard/CalorieProgress";
 import DateNavigator from "../components/dashboard/DateNavigator";
+import MealDetailsDialog from "@/components/meals/MealDetailsDialog";
 
 export default function Dashboard() {
   const [meals, setMeals] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(() => startOfDay(new Date()));
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [selectedMeal, setSelectedMeal] = useState(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     loadMeals();
@@ -50,6 +54,30 @@ export default function Dashboard() {
     if (!date) return;
     setSelectedDate(startOfDay(date));
   };
+
+  const handleMealSelect = useCallback((meal) => {
+    if (!meal) {
+      return;
+    }
+
+    setSelectedMeal(meal);
+    setIsDetailsOpen(true);
+  }, []);
+
+  const handleDetailsChange = useCallback((nextOpen) => {
+    setIsDetailsOpen(nextOpen);
+    if (!nextOpen) {
+      setSelectedMeal(null);
+    }
+  }, []);
+
+  const handleEditMeal = useCallback(
+    (meal) => {
+      if (!meal?.id) return;
+      navigate(`${createPageUrl("History")}/${meal.id}`);
+    },
+    [navigate],
+  );
 
   return (
     <div className="p-4 md:p-8 min-h-screen">
@@ -163,6 +191,7 @@ export default function Dashboard() {
               target={2000}
               meals={selectedDayMeals}
               dateLabel={selectedDayLabel}
+              onSelectMeal={handleMealSelect}
             />
             <NutritionChart meals={selectedDayMeals} isLoading={isLoading} dateLabel={selectedDayLabel} />
           </div>
@@ -173,11 +202,21 @@ export default function Dashboard() {
                 onSelectDate={handleDateSelect}
                 meals={meals}
               />
-              <RecentMeals meals={meals.slice(0, 8)} isLoading={isLoading} />
+              <RecentMeals
+                meals={meals.slice(0, 8)}
+                isLoading={isLoading}
+                onSelectMeal={handleMealSelect}
+              />
             </div>
           </div>
         </div>
       </div>
+      <MealDetailsDialog
+        meal={selectedMeal}
+        open={isDetailsOpen}
+        onOpenChange={handleDetailsChange}
+        onEdit={handleEditMeal}
+      />
     </div>
   );
 }

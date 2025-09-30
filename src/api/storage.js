@@ -225,14 +225,74 @@ function readFromLocalStorage() {
   }
 }
 
+function cloneIngredients(ingredients) {
+  if (!Array.isArray(ingredients)) {
+    return [];
+  }
+
+  return ingredients.map((ingredient) => ({
+    ...(typeof ingredient === 'object' && ingredient !== null ? ingredient : {})
+  }));
+}
+
+function prepareMealsForStorage(meals, { stripInlinePhotos = false } = {}) {
+  if (!Array.isArray(meals)) {
+    return [];
+  }
+
+  return meals.map((meal) => {
+    const safeMeal = { ...(typeof meal === 'object' && meal !== null ? meal : {}) };
+
+    if (stripInlinePhotos && typeof safeMeal.photo_url === 'string' && safeMeal.photo_url.startsWith('data:')) {
+      safeMeal.photo_url = '';
+    }
+
+    safeMeal.ingredients = cloneIngredients(safeMeal.ingredients);
+    return safeMeal;
+  });
+}
+
+function isQuotaExceededError(error) {
+  if (!error) {
+    return false;
+  }
+
+  if (error?.name === 'QuotaExceededError') {
+    return true;
+  }
+
+  const message = String(error?.message || '');
+  return message.toLowerCase().includes('quota');
+}
+
 function writeToLocalStorage(meals) {
   if (typeof window === 'undefined') {
     return;
   }
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(meals));
-  } catch (error) {
-    console.warn('Unable to persist meals to localStorage:', error);
+
+  const attempts = [
+    { stripInlinePhotos: false, logFallback: false },
+    { stripInlinePhotos: true, logFallback: true }
+  ];
+
+  for (const attempt of attempts) {
+    try {
+      const payload = JSON.stringify(prepareMealsForStorage(meals, attempt));
+      window.localStorage.setItem(STORAGE_KEY, payload);
+
+      if (attempt.logFallback) {
+        console.warn(
+          'Inline meal photos were removed before saving to keep storage usage within browser limits.'
+        );
+      }
+
+      return;
+    } catch (error) {
+      if (!isQuotaExceededError(error) || attempt.stripInlinePhotos) {
+        console.warn('Unable to persist meals to localStorage:', error);
+        return;
+      }
+    }
   }
 }
 
