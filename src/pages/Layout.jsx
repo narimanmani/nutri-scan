@@ -2,7 +2,7 @@
 import { useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { Camera, BarChart3, History, Leaf, ClipboardList, Dumbbell } from "lucide-react";
+import { Camera, BarChart3, History, Leaf, ClipboardList, Dumbbell, Ruler } from "lucide-react";
 import { APP_DESCRIPTION, APP_NAME, APP_TAGLINE } from "@/constants/app";
 import {
   Sidebar,
@@ -43,6 +43,11 @@ const navigationItems = [
     title: "Workout Planner",
     url: createPageUrl("Workout Planner"),
     icon: Dumbbell,
+  },
+  {
+    title: "Body Measurements",
+    url: createPageUrl("Body Measurements"),
+    icon: Ruler,
   },
 ];
 

@@ -8,6 +8,7 @@ import History from "./History";
 import EditMeal from "./EditMeal";
 import DietPlans from "./DietPlans";
 import WorkoutPlanner from "./WorkoutPlanner.jsx";
+import BodyMeasurements from "./BodyMeasurements.jsx";
 
 import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
 
@@ -21,6 +22,7 @@ const PAGES = {
 
     "Diet Plans": DietPlans,
     "Workout Planner": WorkoutPlanner,
+    "Body Measurements": BodyMeasurements,
 
 }
 
@@ -61,6 +63,7 @@ function PagesContent() {
 
                 <Route path="/Diet-Plans" element={<DietPlans />} />
                 <Route path="/Workout-Planner" element={<WorkoutPlanner />} />
+                <Route path="/Body-Measurements" element={<BodyMeasurements />} />
             </Routes>
         </Layout>
     );
