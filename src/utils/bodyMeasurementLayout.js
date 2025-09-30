@@ -9,6 +9,13 @@ export const DEFAULT_MEASUREMENT_FIELDS = [
     anchor: { x: 82, y: 30 },
   },
   {
+    id: "shoulder",
+    label: "Shoulders",
+    description: "Measure across the broadest part of your shoulders, keeping the tape horizontal.",
+    point: { x: 50, y: 24 },
+    anchor: { x: 82, y: 24 },
+  },
+  {
     id: "waist",
     label: "Waist",
     description: "Measure around your natural waistline, just above the belly button.",
