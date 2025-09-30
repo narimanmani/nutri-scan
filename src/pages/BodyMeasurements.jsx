@@ -100,7 +100,7 @@ export default function BodyMeasurements() {
                       strokeLinecap="round"
                     />
                     <circle cx={point.x} cy={point.y} r={2.8} fill="#ef4444" stroke="#ffffff" strokeWidth={0.9} />
-                    <circle cx={anchor.x} cy={anchor.y} r={1.8} fill="#fca5a5" />
+                    <circle cx={anchor.x} cy={anchor.y} r={2.8} fill="#ef4444" stroke="#ffffff" strokeWidth={0.9} />
                   </g>
                 );
               })}
