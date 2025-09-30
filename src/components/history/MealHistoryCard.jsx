@@ -56,16 +56,9 @@ export default function MealHistoryCard({ meal, onSelect }) {
               <div className="hidden w-full h-full bg-emerald-100 items-center justify-center">
                 <span className="text-emerald-600 text-xs font-medium">No Image</span>
               </div>
-              <a
-                href={meal.photo_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="absolute inset-0 bg-black/0 hover:bg-black/20 transition-colors duration-200 flex items-center justify-center"
-                onClick={(event) => event.stopPropagation()}
-                onKeyDown={(event) => event.stopPropagation()}
-              >
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/20 transition-colors duration-200">
                 <ExternalLink className="w-4 h-4 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
-              </a>
+              </div>
             </div>
           </div>
 
