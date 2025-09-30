@@ -208,7 +208,26 @@ export default function WorkoutPlanner() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8 px-4 py-10">
+    <div className="relative mx-auto max-w-6xl space-y-8 px-4 py-10">
+      {isGenerating && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-emerald-950/40 backdrop-blur-sm"
+          role="alert"
+          aria-live="assertive"
+        >
+          <div className="flex flex-col items-center gap-4 rounded-3xl border border-white/30 bg-white/80 px-8 py-6 text-center shadow-2xl">
+            <div
+              className="h-12 w-12 animate-spin rounded-full border-4 border-emerald-500 border-t-transparent"
+              aria-hidden="true"
+            />
+            <div className="space-y-1">
+              <p className="text-base font-semibold text-emerald-900">Assembling your workout plan…</p>
+              <p className="text-sm text-emerald-800/80">Thanks for your patience while we gather exercises and coaching tips.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="space-y-3">
         <p className="text-sm font-semibold uppercase tracking-[0.3em] text-emerald-500">Training</p>
         <h1 className="text-3xl font-bold text-emerald-950 sm:text-4xl">Personalized Workout Planner</h1>
