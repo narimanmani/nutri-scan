@@ -1,9 +1,23 @@
 const { getStore } = require('@netlify/blobs');
+const crypto = require('crypto');
 
 const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 20000);
+const OPENAI_ANALYSIS_TIMEOUT_MS = Number(
+  process.env.OPENAI_ANALYSIS_TIMEOUT_MS || Math.max(OPENAI_REQUEST_TIMEOUT_MS, 25000)
+);
 
 const suggestionCache = new Map();
 const estimateCache = new Map();
+const analysisCache = new Map();
+
+const USDA_API_KEY = process.env.USDA_API_KEY || process.env.FDC_API_KEY || '';
+const USDA_API_URL = process.env.USDA_API_URL || 'https://api.nal.usda.gov/fdc/v1';
+const USDA_SUGGESTION_TIMEOUT_MS = Number(process.env.USDA_SUGGESTION_TIMEOUT_MS || 4500);
+const USDA_SUGGESTION_PAGE_SIZE = Number(process.env.USDA_SUGGESTION_PAGE_SIZE || 20);
+const USDA_DATA_TYPES = (process.env.USDA_SUGGESTION_DATA_TYPES
+  ? process.env.USDA_SUGGESTION_DATA_TYPES.split(',')
+  : ['Foundation', 'SR Legacy', 'Survey (FNDDS)', 'Branded']
+).map((value) => value.trim()).filter(Boolean);
 
 const ANALYSIS_SCHEMA = {
   name: 'meal_analysis',
@@ -444,7 +458,16 @@ function cacheSuggestions(query, payload) {
 
 function getCachedSuggestions(query) {
   const normalized = typeof query === 'string' ? query.trim().toLowerCase() : '';
-  return normalized ? suggestionCache.get(normalized) : undefined;
+  if (!normalized) {
+    return undefined;
+  }
+
+  const direct = suggestionCache.get(normalized);
+  if (direct) {
+    return direct;
+  }
+
+  return filterCachedSuggestions(normalized);
 }
 
 function cacheEstimate(signature, payload) {
@@ -458,6 +481,32 @@ function cacheEstimate(signature, payload) {
 
 function getCachedEstimate(signature) {
   return signature ? estimateCache.get(signature) : undefined;
+}
+
+function cacheAnalysis(signature, payload) {
+  if (!signature) {
+    return payload;
+  }
+
+  analysisCache.set(signature, payload);
+  return payload;
+}
+
+function getCachedAnalysis(signature) {
+  return signature ? analysisCache.get(signature) : undefined;
+}
+
+function hashImageDataUrl(imageDataUrl) {
+  if (typeof imageDataUrl !== 'string' || imageDataUrl.length === 0) {
+    return null;
+  }
+
+  try {
+    return crypto.createHash('sha1').update(imageDataUrl).digest('hex');
+  } catch (error) {
+    console.warn('Failed to hash image data URL for analysis cache.', error);
+    return null;
+  }
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = OPENAI_REQUEST_TIMEOUT_MS) {
@@ -488,6 +537,130 @@ function slugify(value) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+function truncateText(value, maxLength = 140) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length <= maxLength) {
+    return trimmed;
+  }
+
+  return `${trimmed.slice(0, maxLength - 1).trim()}…`;
+}
+
+function dedupeSuggestions(suggestions = []) {
+  const seen = new Set();
+  const result = [];
+
+  suggestions.forEach((item) => {
+    if (!item || typeof item.name !== 'string') {
+      return;
+    }
+
+    const key = item.name.trim().toLowerCase();
+    if (!key || seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    result.push(item);
+  });
+
+  return result;
+}
+
+function normalizeUsdaSuggestion(food, index = 0) {
+  if (!food || typeof food !== 'object') {
+    return null;
+  }
+
+  const description = typeof food.description === 'string' ? food.description.trim() : '';
+  if (!description) {
+    return null;
+  }
+
+  const brandOwner = typeof food.brandOwner === 'string' ? food.brandOwner.trim() : '';
+  const dataType = typeof food.dataType === 'string' ? food.dataType.trim() : '';
+  const baseName = brandOwner && !description.toLowerCase().includes(brandOwner.toLowerCase())
+    ? `${description} (${brandOwner})`
+    : description;
+
+  const suggestion = {
+    id: food.fdcId ? `usda-${food.fdcId}` : slugify(`${baseName}-${index}`) || `usda_${index}`,
+    name: baseName,
+    data_source: 'usda'
+  };
+
+  const descriptionParts = [];
+  if (brandOwner && !baseName.includes(brandOwner)) {
+    descriptionParts.push(brandOwner);
+  }
+  if (dataType) {
+    descriptionParts.push(dataType);
+  }
+  if (typeof food.additionalDescriptions === 'string' && food.additionalDescriptions.trim()) {
+    descriptionParts.push(food.additionalDescriptions.trim());
+  }
+  if (typeof food.ingredients === 'string' && food.ingredients.trim()) {
+    descriptionParts.push(`Ingredients: ${truncateText(food.ingredients.trim(), 120)}`);
+  }
+
+  if (descriptionParts.length > 0) {
+    suggestion.description = truncateText(descriptionParts.join(' • '), 160);
+  }
+
+  const servingSize = Number(food.servingSize);
+  const servingUnit = canonicalizeUnit(food.servingSizeUnit);
+
+  if (Number.isFinite(servingSize) && servingSize > 0) {
+    suggestion.example_portion = servingUnit
+      ? `${servingSize} ${servingUnit}`
+      : `${servingSize}`;
+  }
+
+  if (typeof food.householdServingFullText === 'string' && food.householdServingFullText.trim()) {
+    suggestion.example_portion = food.householdServingFullText.trim();
+  }
+
+  if (servingUnit && servingUnit !== 'serving') {
+    suggestion.typical_unit = servingUnit;
+  } else if (typeof food.householdServingFullText === 'string') {
+    const match = food.householdServingFullText.match(/\b(g|gram|grams|ml|milliliter|milliliters|cup|cups|oz|ounce|ounces)\b/i);
+    if (match) {
+      suggestion.typical_unit = canonicalizeUnit(match[0]);
+    }
+  }
+
+  return suggestion;
+}
+
+function filterCachedSuggestions(query) {
+  const normalized = typeof query === 'string' ? query.trim().toLowerCase() : '';
+  if (!normalized) {
+    return undefined;
+  }
+
+  for (const [key, payload] of suggestionCache.entries()) {
+    if (!key.startsWith(normalized) || !payload || !Array.isArray(payload.suggestions)) {
+      continue;
+    }
+
+    const filtered = payload.suggestions
+      .filter((item) => item?.name && item.name.toLowerCase().includes(normalized))
+      .slice(0, DEFAULT_SUGGESTION_LIMIT);
+
+    if (filtered.length > 0) {
+      const result = { suggestions: filtered };
+      suggestionCache.set(normalized, result);
+      return result;
+    }
+  }
+
+  return undefined;
 }
 
 function normalizeAiSuggestion(rawSuggestion, index = 0) {
@@ -570,6 +743,57 @@ async function callOpenAiForJson({ messages, schema, model = 'gpt-4o-mini', time
   }
 }
 
+async function fetchUsdaSuggestions(query) {
+  if (!USDA_API_KEY || !query) {
+    return null;
+  }
+
+  const body = {
+    query,
+    pageSize: USDA_SUGGESTION_PAGE_SIZE,
+    requireAllWords: false,
+    pageNumber: 1
+  };
+
+  if (USDA_DATA_TYPES.length > 0) {
+    body.dataType = USDA_DATA_TYPES;
+  }
+
+  try {
+    const response = await fetchWithTimeout(
+      `${USDA_API_URL.replace(/\/$/, '')}/foods/search?api_key=${encodeURIComponent(USDA_API_KEY)}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      },
+      USDA_SUGGESTION_TIMEOUT_MS
+    );
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      const message = error?.error?.message || error?.message || response.statusText;
+      throw new Error(message || `USDA request failed with status ${response.status}`);
+    }
+
+    const payload = await response.json().catch(() => null);
+    if (!payload || !Array.isArray(payload.foods)) {
+      return { suggestions: [] };
+    }
+
+    const suggestions = payload.foods
+      .map((food, index) => normalizeUsdaSuggestion(food, index))
+      .filter(Boolean);
+
+    return { suggestions: suggestions.slice(0, DEFAULT_SUGGESTION_LIMIT) };
+  } catch (error) {
+    console.warn('USDA ingredient suggestion request failed.', error);
+    return null;
+  }
+}
+
 async function fetchAiSuggestions(query) {
   const cached = getCachedSuggestions(query);
   if (cached) {
@@ -582,42 +806,50 @@ async function fetchAiSuggestions(query) {
 
   const trimmedQuery = query.trim();
 
-  if (!process.env.OPENAI_API_KEY) {
-    return cacheSuggestions(query, { suggestions: fallbackSuggestions(trimmedQuery) });
+  const aggregated = [];
+
+  const usdaResult = await fetchUsdaSuggestions(trimmedQuery).catch(() => null);
+  if (usdaResult && Array.isArray(usdaResult.suggestions) && usdaResult.suggestions.length > 0) {
+    aggregated.push(...usdaResult.suggestions);
   }
 
-  try {
-    const result = await callOpenAiForJson({
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You help people log meals by suggesting closely related ingredients based on their partial input. Return relevant whole foods or packaged ingredients without recipes.'
-        },
-        {
-          role: 'user',
-          content: `Suggest up to ${DEFAULT_SUGGESTION_LIMIT} ingredient ideas matching "${trimmedQuery}". Focus on realistic grocery or kitchen items and include preparation details when helpful.`
-        }
-      ],
-      schema: SUGGESTION_RESPONSE_SCHEMA,
-      model: OPENAI_SUGGESTION_MODEL
-    });
+  let aiSuggestions = [];
+  if (aggregated.length < DEFAULT_SUGGESTION_LIMIT && process.env.OPENAI_API_KEY) {
+    try {
+      const result = await callOpenAiForJson({
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You help people log meals by suggesting closely related ingredients based on their partial input. Return relevant whole foods or packaged ingredients without recipes.'
+          },
+          {
+            role: 'user',
+            content: `Suggest up to ${DEFAULT_SUGGESTION_LIMIT} ingredient ideas matching "${trimmedQuery}". Focus on realistic grocery or kitchen items and include preparation details when helpful.`
+          }
+        ],
+        schema: SUGGESTION_RESPONSE_SCHEMA,
+        model: OPENAI_SUGGESTION_MODEL
+      });
 
-    const rawSuggestions = Array.isArray(result?.suggestions) ? result.suggestions : [];
-    const suggestions = rawSuggestions
-      .map((item, index) => normalizeAiSuggestion(item, index))
-      .filter(Boolean)
-      .slice(0, DEFAULT_SUGGESTION_LIMIT);
-
-    if (suggestions.length === 0) {
-      return cacheSuggestions(query, { suggestions: fallbackSuggestions(trimmedQuery) });
+      const rawSuggestions = Array.isArray(result?.suggestions) ? result.suggestions : [];
+      aiSuggestions = rawSuggestions
+        .map((item, index) => normalizeAiSuggestion(item, index))
+        .filter(Boolean);
+    } catch (error) {
+      console.warn('OpenAI ingredient suggestion request failed. Falling back to cached results.', error);
     }
-
-    return cacheSuggestions(query, { suggestions });
-  } catch (error) {
-    console.warn('OpenAI ingredient suggestion request failed. Using fallback data.', error);
-    return cacheSuggestions(query, { suggestions: fallbackSuggestions(trimmedQuery) });
   }
+
+  aggregated.push(...aiSuggestions);
+
+  let finalSuggestions = dedupeSuggestions(aggregated).slice(0, DEFAULT_SUGGESTION_LIMIT);
+
+  if (finalSuggestions.length === 0) {
+    finalSuggestions = fallbackSuggestions(trimmedQuery);
+  }
+
+  return cacheSuggestions(query, { suggestions: finalSuggestions.slice(0, DEFAULT_SUGGESTION_LIMIT) });
 }
 
 function safeRound(value) {
@@ -757,60 +989,85 @@ async function storeMealPhoto(imageDataUrl) {
 }
 
 async function analyzeWithOpenAI({ imageDataUrl }) {
+  const cacheKey = hashImageDataUrl(imageDataUrl);
+  const cached = getCachedAnalysis(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const fallback = ensureNumbers(MOCK_RESPONSE);
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
     console.warn('OPENAI_API_KEY is not configured. Using mock analysis response.');
-    return ensureNumbers(MOCK_RESPONSE);
+    return cacheAnalysis(cacheKey, fallback);
   }
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are a registered dietitian that analyses meals from photos and provides complete nutritional breakdowns.'
-        },
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: 'Analyze this food image and return a detailed nutritional estimate. Use realistic portion sizes.'
-            },
-            {
-              type: 'image_url',
-              image_url: {
-                url: imageDataUrl
-              }
+  const payload = {
+    model: 'gpt-4o',
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You are a registered dietitian that analyses meals from photos and provides complete nutritional breakdowns.'
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: 'Analyze this food image and return a detailed nutritional estimate. Use realistic portion sizes.'
+          },
+          {
+            type: 'image_url',
+            image_url: {
+              url: imageDataUrl
             }
-          ]
-        }
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: ANALYSIS_SCHEMA
+          }
+        ]
       }
-    })
-  });
+    ],
+    response_format: {
+      type: 'json_schema',
+      json_schema: ANALYSIS_SCHEMA
+    }
+  };
+
+  let response;
+  try {
+    response = await fetchWithTimeout(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(payload)
+      },
+      OPENAI_ANALYSIS_TIMEOUT_MS
+    );
+  } catch (error) {
+    console.error('OpenAI meal analysis request failed.', error);
+    return cacheAnalysis(cacheKey, fallback);
+  }
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || 'The OpenAI API returned an unexpected error.');
+    console.error('OpenAI meal analysis responded with an error.', error);
+    return cacheAnalysis(cacheKey, fallback);
   }
 
-  const data = await response.json();
+  const data = await response.json().catch((error) => {
+    console.error('Failed to parse OpenAI analysis response JSON.', error);
+    return null;
+  });
+
   const content = data?.choices?.[0]?.message?.content;
 
   if (!content) {
-    throw new Error('The OpenAI API did not return any analysis content.');
+    console.warn('The OpenAI API did not return any analysis content. Falling back to cached data.');
+    return cacheAnalysis(cacheKey, fallback);
   }
 
   let parsed;
@@ -818,10 +1075,10 @@ async function analyzeWithOpenAI({ imageDataUrl }) {
     parsed = JSON.parse(content);
   } catch (error) {
     console.error('Failed to parse OpenAI response, falling back to mock data.', error);
-    return ensureNumbers(MOCK_RESPONSE);
+    return cacheAnalysis(cacheKey, fallback);
   }
 
-  return ensureNumbers(parsed);
+  return cacheAnalysis(cacheKey, ensureNumbers(parsed));
 }
 
 function jsonResponse(statusCode, body) {

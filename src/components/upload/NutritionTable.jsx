@@ -711,7 +711,9 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
                                                 ? 'AI suggestion'
                                                 : suggestion.data_source === 'fallback'
                                                   ? 'Reference library'
-                                                  : 'Suggested value'}
+                                                  : suggestion.data_source === 'usda'
+                                                    ? 'USDA database'
+                                                    : 'Suggested value'}
                                             </div>
                                           )}
                                         </button>
@@ -725,13 +727,15 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
                           <p className="text-xs text-gray-400 mt-2">
                             {formatUnitLabel(ingredient.unit)} detected
                           </p>
-                          {selectedSuggestion && (
-                            <p className="text-xs text-emerald-600 mt-1">
-                              {selectedSuggestion.data_source === 'openai'
-                                ? 'AI suggestion'
-                                : 'Suggested value'}: {selectedSuggestion.name}
-                            </p>
-                          )}
+                            {selectedSuggestion && (
+                              <p className="text-xs text-emerald-600 mt-1">
+                                {selectedSuggestion.data_source === 'openai'
+                                  ? 'AI suggestion'
+                                  : selectedSuggestion.data_source === 'usda'
+                                    ? 'USDA database'
+                                    : 'Suggested value'}: {selectedSuggestion.name}
+                              </p>
+                            )}
                         </td>
                         <td className="px-4 py-4 align-top">
                           <Input
