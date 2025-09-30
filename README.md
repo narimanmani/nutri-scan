@@ -6,6 +6,7 @@ A Vite + React application that analyzes meal photos using OpenAI GPT-4o and kee
 
 - Node.js 18+
 - An OpenAI API key with access to the GPT-4o model (optional for mock responses)
+- (Optional) A [USDA FoodData Central](https://fdc.nal.usda.gov/api-guide.html) API key for faster ingredient lookups
 - (Optional) A [wger](https://wger.de/en/software/api) API token for richer workout visuals and authenticated exercise lookups
 - (Optional) [Netlify CLI](https://docs.netlify.com/cli/get-started/) for local function development
 
@@ -22,6 +23,8 @@ A Vite + React application that analyzes meal photos using OpenAI GPT-4o and kee
    # Optionally override the smaller models used for typeahead + nutrition fills
    # OPENAI_SUGGESTION_MODEL=gpt-4o-mini
    # OPENAI_NUTRITION_MODEL=gpt-4o-mini
+   # Optional: enables USDA-backed ingredient typeahead with caching
+   USDA_API_KEY=your-fooddata-central-key
    # Optional fallback for running `npm run dev` without Netlify
    VITE_OPENAI_API_KEY=sk-your-key
    # Optional: enables authenticated requests for workout plans and anatomy assets
