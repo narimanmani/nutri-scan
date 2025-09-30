@@ -10,6 +10,7 @@ import DietPlans from "./DietPlans";
 import WorkoutPlanner from "./WorkoutPlanner.jsx";
 import BodyMeasurements from "./BodyMeasurements.jsx";
 import BodyMeasurementsAdmin from "./BodyMeasurementsAdmin.jsx";
+import MeasurementAnalytics from "./MeasurementAnalytics.jsx";
 
 import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
 
@@ -24,6 +25,7 @@ const PAGES = {
     "Diet Plans": DietPlans,
     "Workout Planner": WorkoutPlanner,
     "Body Measurements": BodyMeasurements,
+    "Measurement Intelligence": MeasurementAnalytics,
     "Body Measurements Admin": BodyMeasurementsAdmin,
 
 }
@@ -66,6 +68,7 @@ function PagesContent() {
                 <Route path="/Diet-Plans" element={<DietPlans />} />
                 <Route path="/Workout-Planner" element={<WorkoutPlanner />} />
                 <Route path="/Body-Measurements" element={<BodyMeasurements />} />
+                <Route path="/Measurement-Intelligence" element={<MeasurementAnalytics />} />
                 <Route path="/Body-Measurements-Admin" element={<BodyMeasurementsAdmin />} />
             </Routes>
         </Layout>

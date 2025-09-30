@@ -2,7 +2,7 @@
 import { useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { Camera, BarChart3, History, Leaf, ClipboardList, Dumbbell, Ruler, Settings2 } from "lucide-react";
+import { Camera, BarChart3, History, Leaf, ClipboardList, Dumbbell, Ruler, Settings2, Brain } from "lucide-react";
 import { APP_DESCRIPTION, APP_NAME, APP_TAGLINE } from "@/constants/app";
 import {
   Sidebar,
@@ -48,6 +48,11 @@ const navigationItems = [
     title: "Body Measurements",
     url: createPageUrl("Body Measurements"),
     icon: Ruler,
+  },
+  {
+    title: "Measurement Intelligence",
+    url: createPageUrl("Measurement Intelligence"),
+    icon: Brain,
   },
   {
     title: "Body Measurements Admin",
