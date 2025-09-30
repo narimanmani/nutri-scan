@@ -31,15 +31,18 @@ export default function Dashboard() {
         return;
       }
 
-      const sorted = [...snapshot]
-        .sort((a, b) => {
-          const aTime = new Date(a.created_date || a.meal_date || 0).getTime();
-          const bTime = new Date(b.created_date || b.meal_date || 0).getTime();
-          return bTime - aTime;
-        })
-        .slice(0, 50);
+      const sorted = Array.from(snapshot).sort((a, b) => {
+        const aTime = new Date(a.meal_date || a.created_date || 0).getTime();
+        const bTime = new Date(b.meal_date || b.created_date || 0).getTime();
+        return bTime - aTime;
+      });
 
-      setMeals(sorted);
+      setMeals((previous) => {
+        if (previous.length === sorted.length && previous.every((meal, index) => meal === sorted[index])) {
+          return previous;
+        }
+        return sorted;
+      });
       setIsLoading(false);
     };
 

@@ -35,30 +35,44 @@ export default function RecentMeals({ meals, isLoading, onSelectMeal }) {
           </div>
         ) : meals.length > 0 ? (
           <div className="divide-y divide-gray-100">
-            {meals.map((meal) => (
-              <button
-                key={meal.id}
-                type="button"
-                onClick={() => onSelectMeal?.(meal)}
-                className="flex w-full items-center gap-4 p-6 text-left transition-colors hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-              >
-                <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
-                  <Camera className="w-5 h-5 text-emerald-600" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <h3 className="font-medium text-gray-900 truncate">{meal.meal_name}</h3>
-                    <Badge className={mealTypeColors[meal.meal_type] || mealTypeColors.snack}>
-                      {meal.meal_type}
-                    </Badge>
+            {meals.map((meal) => {
+              const hasPhoto = typeof meal.photo_url === 'string' && meal.photo_url.length > 0;
+              return (
+                <button
+                  key={meal.id}
+                  type="button"
+                  onClick={() => onSelectMeal?.(meal)}
+                  className="flex w-full items-center gap-4 p-6 text-left transition-colors hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                >
+                  <div className="h-12 w-12 flex-shrink-0 overflow-hidden rounded-xl border border-gray-100 bg-gray-100">
+                    {hasPhoto ? (
+                      <img
+                        src={meal.photo_url}
+                        alt={meal.meal_name || 'Logged meal photo'}
+                        className="h-full w-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center bg-emerald-50">
+                        <Camera className="h-5 w-5 text-emerald-600" />
+                      </div>
+                    )}
                   </div>
-                  <div className="flex items-center gap-4 text-sm text-gray-500">
-                    <span>{format(new Date(meal.meal_date || meal.created_date), 'MMM d')}</span>
-                    <span>{meal.calories || 0} cal</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="font-medium text-gray-900 truncate">{meal.meal_name}</h3>
+                      <Badge className={mealTypeColors[meal.meal_type] || mealTypeColors.snack}>
+                        {meal.meal_type}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-4 text-sm text-gray-500">
+                      <span>{format(new Date(meal.meal_date || meal.created_date), 'MMM d')}</span>
+                      <span>{meal.calories || 0} cal</span>
+                    </div>
                   </div>
-                </div>
-              </button>
-            ))}
+                </button>
+              );
+            })}
           </div>
         ) : (
           <div className="p-12 text-center text-gray-500">
