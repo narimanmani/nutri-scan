@@ -1,3 +1,4 @@
+import PropTypes from "prop-types";
 import { useEffect, useMemo, useState } from "react";
 import { loadMeasurementHistory } from "@/utils/measurementHistory.js";
 import { SAMPLE_MEASUREMENT_HISTORY } from "@/data/sampleMeasurementHistory.js";
@@ -55,6 +56,65 @@ const SOMATOTYPE_TIPS = {
     "Keep nutrition flexible but anchored by adequate protein at each meal.",
     "Regularly reassess metrics to stay aligned with evolving goals.",
   ],
+};
+
+const SHAPE_ICON_PATHS = {
+  Apple:
+    "M32 4C26 4 22 8 20 12C12 14 8 22 8 32C8 48 20 60 32 60C44 60 56 48 56 32C56 22 52 14 44 12C42 8 38 4 32 4Z",
+  Pear:
+    "M32 6C26 6 22 10 21 16C16 18 12 24 12 31C12 39 16 45 20 49C24 53 26 58 32 60C38 58 40 53 44 49C48 45 52 39 52 31C52 24 48 18 43 16C42 10 38 6 32 6Z",
+  Rectangle:
+    "M18 8H46C50 8 54 12 54 16V48C54 52 50 56 46 56H18C14 56 10 52 10 48V16C10 12 14 8 18 8Z",
+  "Inverted Triangle": "M8 12H56L32 60L8 12Z",
+  Hourglass:
+    "M18 8H46C50 8 54 12 54 18C54 24 48 30 42 34C48 38 54 44 54 50C54 56 50 60 46 60H18C14 60 10 56 10 50C10 44 16 38 22 34C16 30 10 24 10 18C10 12 14 8 18 8Z",
+};
+
+const BODY_SHAPE_ICON_STYLES = {
+  table: {
+    container:
+      "h-12 w-12 rounded-2xl border border-emerald-100 bg-emerald-50/80 text-emerald-600 shadow-sm",
+    icon: "h-8 w-8",
+  },
+  hero: {
+    container:
+      "h-32 w-32 rounded-3xl border border-white/40 bg-white/10 text-white shadow-xl shadow-emerald-900/30",
+    icon: "h-20 w-20",
+  },
+};
+
+function BodyShapeIcon({ shape, variant = "table" }) {
+  const path = shape ? SHAPE_ICON_PATHS[shape] : null;
+  const styles = BODY_SHAPE_ICON_STYLES[variant] ?? BODY_SHAPE_ICON_STYLES.table;
+
+  if (!path) {
+    return (
+      <div
+        className={`flex items-center justify-center ${styles.container}`}
+        role="img"
+        aria-label="Body shape unavailable"
+      >
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-current">n/a</span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`flex items-center justify-center ${styles.container}`}
+      role="img"
+      aria-label={`${shape} body shape silhouette`}
+    >
+      <svg viewBox="0 0 64 72" className={`${styles.icon}`}>
+        <path d={path} fill="currentColor" />
+      </svg>
+    </div>
+  );
+}
+
+BodyShapeIcon.propTypes = {
+  shape: PropTypes.string,
+  variant: PropTypes.oneOf(["table", "hero"]),
 };
 
 function buildMeasurementHistory() {
@@ -639,6 +699,7 @@ export default function MeasurementAnalytics() {
             <thead className="bg-emerald-50/60">
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-emerald-700">Label</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-emerald-700">Shape</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-emerald-700">Date</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-emerald-700">Gender</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-emerald-700">Age</th>
@@ -651,6 +712,8 @@ export default function MeasurementAnalytics() {
             <tbody className="divide-y divide-emerald-100">
               {history.map((entry) => {
                 const ratios = computeRatios(entry);
+                const shapeResult = classifyBodyShape(entry, ratios);
+                const shapeLabel = shapeResult.available ? shapeResult.primary : null;
                 return (
                   <tr
                     key={entry.id}
@@ -664,6 +727,14 @@ export default function MeasurementAnalytics() {
                       {entry.notes?.expectedSomatotype ? (
                         <p className="text-xs text-emerald-700/70">{entry.notes.expectedSomatotype}</p>
                       ) : null}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <BodyShapeIcon shape={shapeLabel} />
+                        <span className="text-xs font-semibold uppercase tracking-wide text-emerald-700/80">
+                          {shapeLabel ?? "n/a"}
+                        </span>
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-sm text-emerald-800/80">{formatDate(entry.recordedAt)}</td>
                     <td className="px-4 py-3 text-sm capitalize text-emerald-800/80">{entry.profile.gender}</td>
@@ -763,13 +834,18 @@ export default function MeasurementAnalytics() {
             {analysis.shape.available ? (
               <div className="space-y-4">
                 <div className="rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 p-5 text-white shadow-lg">
-                  <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-white/80">Body Shape</h3>
-                  <p className="mt-2 text-2xl font-bold">
-                    {analysis.shape.primary} — {analysis.shape.confidence ? formatPercent(analysis.shape.confidence) : "n/a"}
-                  </p>
-                  {analysis.shape.reason ? (
-                    <p className="mt-2 text-sm text-white/80">Reason: {analysis.shape.reason}</p>
-                  ) : null}
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-white/80">Body Shape</h3>
+                      <p className="mt-2 text-2xl font-bold">
+                        {analysis.shape.primary} — {analysis.shape.confidence ? formatPercent(analysis.shape.confidence) : "n/a"}
+                      </p>
+                      {analysis.shape.reason ? (
+                        <p className="mt-2 text-sm text-white/80">Reason: {analysis.shape.reason}</p>
+                      ) : null}
+                    </div>
+                    <BodyShapeIcon shape={analysis.shape.primary} variant="hero" />
+                  </div>
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
