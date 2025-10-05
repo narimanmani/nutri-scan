@@ -1,10 +1,5 @@
-import mealsSeed from '@/data/meals.json';
-import dietPlansSeed from '@/data/dietPlans.json';
-
 const NETLIFY_UPLOAD_ENDPOINT = '/api/upload-photo';
-
-const STORAGE_KEY = 'nutri-scan:meals';
-const DIET_PLAN_STORAGE_KEY = 'nutri-scan:diet-plans';
+const API_BASE_PATH = '/api';
 
 let cachedMeals = null;
 let cachedDietPlans = null;
@@ -43,24 +38,6 @@ const UNIT_ALIASES = {
   portions: 'serving'
 };
 
-function canonicalizeUnit(unit) {
-  if (typeof unit !== 'string') {
-    return 'g';
-  }
-
-  const normalized = unit.trim().toLowerCase();
-  if (normalized.length === 0) {
-    return 'g';
-  }
-
-  const mapped = UNIT_ALIASES[normalized];
-  if (mapped) {
-    return mapped;
-  }
-
-  return CANONICAL_UNITS.includes(normalized) ? normalized : 'g';
-}
-
 const NUTRIENT_FIELDS = [
   'calories',
   'protein',
@@ -82,6 +59,24 @@ function generateId() {
     return globalCrypto.randomUUID();
   }
   return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function canonicalizeUnit(unit) {
+  if (typeof unit !== 'string') {
+    return 'g';
+  }
+
+  const normalized = unit.trim().toLowerCase();
+  if (normalized.length === 0) {
+    return 'g';
+  }
+
+  const mapped = UNIT_ALIASES[normalized];
+  if (mapped) {
+    return mapped;
+  }
+
+  return CANONICAL_UNITS.includes(normalized) ? normalized : 'g';
 }
 
 function normalizeIngredient(ingredient, index = 0) {
@@ -125,6 +120,10 @@ function sumNutrients(ingredients) {
 }
 
 function withDefaults(meal) {
+  if (!meal || typeof meal !== 'object') {
+    return withDefaults({});
+  }
+
   const ingredients = normalizeIngredients(meal.ingredients);
   const totals = ingredients.length > 0 ? sumNutrients(ingredients) : null;
 
@@ -183,7 +182,6 @@ async function uploadPhotoIfNeeded(photoUrl) {
     return '';
   }
 
-  // Skip uploads for already hosted images.
   if (!photoUrl.startsWith('data:')) {
     return photoUrl;
   }
@@ -211,19 +209,6 @@ async function uploadPhotoIfNeeded(photoUrl) {
   }
 
   return photoUrl;
-}
-
-function readFromLocalStorage() {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-  try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    return stored ? JSON.parse(stored) : null;
-  } catch (error) {
-    console.warn('Unable to read meals from localStorage:', error);
-    return null;
-  }
 }
 
 function cloneIngredients(ingredients) {
@@ -286,122 +271,188 @@ function notifyMealListeners() {
   });
 }
 
-function prepareMealsForStorage(meals, { stripInlinePhotos = false } = {}) {
-  if (!Array.isArray(meals)) {
-    return [];
+class ApiError extends Error {
+  constructor(message, status, payload) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+async function fetchJson(path, options = {}) {
+  const { method = 'GET', body, headers = {} } = options;
+  let requestBody = body;
+  const requestHeaders = { ...headers };
+
+  if (body && typeof body === 'object' && !(body instanceof FormData)) {
+    requestBody = JSON.stringify(body);
+    if (!requestHeaders['Content-Type']) {
+      requestHeaders['Content-Type'] = 'application/json';
+    }
   }
 
-  return meals.map((meal) => {
-    const safeMeal = { ...(typeof meal === 'object' && meal !== null ? meal : {}) };
-
-    if (stripInlinePhotos && typeof safeMeal.photo_url === 'string' && safeMeal.photo_url.startsWith('data:')) {
-      safeMeal.photo_url = '';
-    }
-
-    safeMeal.ingredients = cloneIngredients(safeMeal.ingredients);
-    return safeMeal;
+  const response = await fetch(`${API_BASE_PATH}${path}`, {
+    method,
+    headers: requestHeaders,
+    body: requestBody
   });
+
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : null;
+
+  if (!response.ok) {
+    const message = payload?.error || `Request to ${path} failed with status ${response.status}.`;
+    throw new ApiError(message, response.status, payload);
+  }
+
+  return payload;
 }
 
-function isQuotaExceededError(error) {
-  if (!error) {
-    return false;
-  }
+function sortMeals(meals, order = '-created_date') {
+  const sortValue = typeof order === 'string' && order.length > 0 ? order : '-created_date';
+  const direction = sortValue.startsWith('-') ? -1 : 1;
+  const key = sortValue.replace('-', '') || 'created_date';
 
-  if (error?.name === 'QuotaExceededError') {
-    return true;
-  }
+  const safeMeals = Array.isArray(meals) ? [...meals] : [];
+  safeMeals.sort((a, b) => {
+    const aValue = new Date(a[key] || a.created_date || 0).getTime();
+    const bValue = new Date(b[key] || b.created_date || 0).getTime();
+    return (aValue - bValue) * direction;
+  });
 
-  const message = String(error?.message || '');
-  return message.toLowerCase().includes('quota');
+  return safeMeals;
 }
 
-function writeToLocalStorage(meals) {
-  if (typeof window === 'undefined') {
-    return;
+async function loadMeals({ force = false } = {}) {
+  if (!cachedMeals || force) {
+    const payload = await fetchJson('/meals');
+    const rows = Array.isArray(payload?.data) ? payload.data : [];
+    cachedMeals = rows.map((meal) => withDefaults(meal));
   }
 
-  const attempts = [
-    { stripInlinePhotos: false, logFallback: false },
-    { stripInlinePhotos: true, logFallback: true }
-  ];
+  return cachedMeals || [];
+}
 
-  for (const attempt of attempts) {
-    try {
-      const payload = JSON.stringify(prepareMealsForStorage(meals, attempt));
-      window.localStorage.setItem(STORAGE_KEY, payload);
+function insertMealIntoCache(meal) {
+  const normalized = withDefaults(meal);
+  const existing = Array.isArray(cachedMeals) ? [...cachedMeals] : [];
+  const filtered = existing.filter((item) => item?.id !== normalized.id);
+  filtered.push(normalized);
+  cachedMeals = sortMeals(filtered, '-created_date');
+  notifyMealListeners();
+  return normalized;
+}
 
-      if (attempt.logFallback) {
-        console.warn(
-          'Inline meal photos were removed before saving to keep storage usage within browser limits.'
-        );
+export function subscribeToMealChanges(listener, { immediate = false } = {}) {
+  if (typeof listener !== 'function') {
+    return () => {};
+  }
+
+  mealListeners.add(listener);
+
+  if (immediate) {
+    (async () => {
+      try {
+        await loadMeals();
+        listener(createMealsSnapshot());
+      } catch (error) {
+        console.error('Unable to deliver the initial meals snapshot to a listener:', error);
       }
+    })();
+  }
 
-      return;
-    } catch (error) {
-      if (!isQuotaExceededError(error) || attempt.stripInlinePhotos) {
-        console.warn('Unable to persist meals to localStorage:', error);
-        return;
+  return () => {
+    mealListeners.delete(listener);
+  };
+}
+
+export async function listMeals(order = '-created_date', limit) {
+  const meals = await loadMeals();
+  const sorted = sortMeals(meals, order);
+  return typeof limit === 'number' ? sorted.slice(0, limit) : sorted;
+}
+
+export async function createMeal(meal) {
+  const storedPhotoUrl = await uploadPhotoIfNeeded(meal.photo_url);
+  const payload = await fetchJson('/meals', {
+    method: 'POST',
+    body: {
+      meal: {
+        ...meal,
+        photo_url: storedPhotoUrl
       }
-    }
-  }
-}
-
-function syncCachedMealsFromStorage(rawValue) {
-  if (rawValue === null) {
-    cachedMeals = [];
-    notifyMealListeners();
-    return;
-  }
-
-  if (typeof rawValue !== 'string') {
-    return;
-  }
-
-  try {
-    const parsed = JSON.parse(rawValue);
-    if (Array.isArray(parsed)) {
-      cachedMeals = parsed.map(withDefaults);
-      notifyMealListeners();
-    }
-  } catch (error) {
-    console.warn('Unable to synchronize meals from storage event:', error);
-  }
-}
-
-if (typeof window !== 'undefined' && !window.__nutriScanMealsStorageListener) {
-  window.__nutriScanMealsStorageListener = true;
-  window.addEventListener('storage', (event) => {
-    if (event.key === STORAGE_KEY) {
-      syncCachedMealsFromStorage(event.newValue);
     }
   });
+
+  const saved = payload?.data ? payload.data : null;
+  if (!saved) {
+    throw new Error('The server did not return the saved meal.');
+  }
+
+  return insertMealIntoCache(saved);
 }
 
-function readPlansFromLocalStorage() {
-  if (typeof window === 'undefined') {
+export async function getMealById(id) {
+  if (!id) {
     return null;
   }
 
+  if (Array.isArray(cachedMeals)) {
+    const cached = cachedMeals.find((meal) => meal.id === id);
+    if (cached) {
+      return withDefaults(cached);
+    }
+  }
+
   try {
-    const stored = window.localStorage.getItem(DIET_PLAN_STORAGE_KEY);
-    return stored ? JSON.parse(stored) : null;
+    const payload = await fetchJson(`/meals/${encodeURIComponent(id)}`);
+    if (!payload?.data) {
+      return null;
+    }
+    return insertMealIntoCache(payload.data);
   } catch (error) {
-    console.warn('Unable to read diet plans from localStorage:', error);
-    return null;
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
   }
 }
 
-function writePlansToLocalStorage(plans) {
-  if (typeof window === 'undefined') {
-    return;
+export async function updateMeal(id, updates = {}) {
+  if (!id) {
+    throw new Error('An id is required to update a meal.');
   }
 
-  try {
-    window.localStorage.setItem(DIET_PLAN_STORAGE_KEY, JSON.stringify(plans));
-  } catch (error) {
-    console.warn('Unable to persist diet plans to localStorage:', error);
+  const meals = Array.isArray(cachedMeals) ? cachedMeals : await loadMeals();
+  const existing = meals.find((meal) => meal.id === id);
+
+  if (!existing) {
+    throw new Error('Meal not found.');
   }
+
+  const nextPhotoSource =
+    typeof updates.photo_url === 'string' && updates.photo_url.length > 0
+      ? updates.photo_url
+      : existing.photo_url;
+  const storedPhotoUrl = await uploadPhotoIfNeeded(nextPhotoSource);
+
+  const payload = await fetchJson(`/meals/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: {
+      meal: {
+        ...updates,
+        photo_url: storedPhotoUrl
+      }
+    }
+  });
+
+  const saved = payload?.data ? payload.data : null;
+  if (!saved) {
+    throw new Error('The server did not return the updated meal.');
+  }
+
+  return insertMealIntoCache(saved);
 }
 
 function normalizeMacroTargets(targets = {}) {
@@ -507,185 +558,19 @@ function clonePlan(plan) {
   };
 }
 
-function hydrateDietPlanSeed() {
-  const hydrated = dietPlansSeed.map((plan, index) =>
-    withPlanDefaults(
-      {
-        ...plan,
-        isActive: index === 0,
-        source: 'template',
-      },
-      index,
-    ),
-  );
-
-  if (!hydrated.some((plan) => plan.isActive) && hydrated.length > 0) {
-    hydrated[0] = { ...hydrated[0], isActive: true };
+async function loadDietPlans({ force = false } = {}) {
+  if (!cachedDietPlans || force) {
+    const payload = await fetchJson('/diet-plans');
+    const rows = Array.isArray(payload?.data) ? payload.data : [];
+    cachedDietPlans = rows.map((plan, index) => withPlanDefaults(plan, index));
   }
 
-  return hydrated;
+  return cachedDietPlans || [];
 }
 
-async function getDietPlans() {
-  if (cachedDietPlans) {
-    return cachedDietPlans;
-  }
-
-  const stored = readPlansFromLocalStorage();
-  if (stored && Array.isArray(stored)) {
-    const normalized = stored.map((plan, index) => withPlanDefaults(plan, index));
-
-    if (!normalized.some((plan) => plan.isActive) && normalized.length > 0) {
-      normalized[0] = { ...normalized[0], isActive: true };
-    }
-
-    cachedDietPlans = normalized;
-    return cachedDietPlans;
-  }
-
-  cachedDietPlans = hydrateDietPlanSeed();
-  writePlansToLocalStorage(cachedDietPlans);
-  return cachedDietPlans;
-}
-
-function hydrateSeedData() {
-  return mealsSeed.map((meal) => {
-    const createdDate = meal.created_date
-      ?? (meal.meal_date ? new Date(meal.meal_date).toISOString() : new Date().toISOString());
-
-    return withDefaults({
-      ...meal,
-      created_date: createdDate
-    });
-  });
-}
-
-async function getMeals() {
-  if (cachedMeals) {
-    return cachedMeals;
-  }
-
-  const stored = readFromLocalStorage();
-  if (stored && Array.isArray(stored)) {
-    cachedMeals = stored.map(withDefaults);
-    return cachedMeals;
-  }
-
-  cachedMeals = hydrateSeedData();
-  writeToLocalStorage(cachedMeals);
-  return cachedMeals;
-}
-
-export function subscribeToMealChanges(listener, { immediate = false } = {}) {
-  if (typeof listener !== 'function') {
-    return () => {};
-  }
-
-  mealListeners.add(listener);
-
-  if (immediate) {
-    (async () => {
-      try {
-        await getMeals();
-        listener(createMealsSnapshot());
-      } catch (error) {
-        console.error('Unable to deliver the initial meals snapshot to a listener:', error);
-      }
-    })();
-  }
-
-  return () => {
-    mealListeners.delete(listener);
-  };
-}
-
-export async function listMeals(order = '-created_date', limit) {
-  const meals = await getMeals();
-  const sortValue = typeof order === 'string' && order.length > 0 ? order : '-created_date';
-  const direction = sortValue.startsWith('-') ? -1 : 1;
-  const key = sortValue.replace('-', '') || 'created_date';
-
-  const sorted = [...meals].sort((a, b) => {
-    const aValue = new Date(a[key] || a.created_date || 0).getTime();
-    const bValue = new Date(b[key] || b.created_date || 0).getTime();
-    return (aValue - bValue) * direction;
-  });
-
-  return typeof limit === 'number' ? sorted.slice(0, limit) : sorted;
-}
-
-export async function createMeal(meal) {
-  const meals = await getMeals();
-  const storedPhotoUrl = await uploadPhotoIfNeeded(meal.photo_url);
-  const newMeal = withDefaults({
-    ...meal,
-    id: `meal_${generateId()}`,
-    created_date: new Date().toISOString(),
-    photo_url: storedPhotoUrl
-  });
-
-  meals.unshift(newMeal);
-  cachedMeals = meals;
-  writeToLocalStorage(meals);
-  notifyMealListeners();
-  return newMeal;
-}
-
-export async function getMealById(id) {
-  if (!id) {
-    return null;
-  }
-
-  const meals = await getMeals();
-  const found = meals.find((meal) => meal.id === id);
-  return found ? withDefaults(found) : null;
-}
-
-export async function updateMeal(id, updates = {}) {
-  if (!id) {
-    throw new Error('An id is required to update a meal.');
-  }
-
-  const meals = await getMeals();
-  const index = meals.findIndex((meal) => meal.id === id);
-
-  if (index === -1) {
-    throw new Error('Meal not found.');
-  }
-
-  const existing = meals[index];
-  const nextPhotoSource =
-    typeof updates.photo_url === 'string' && updates.photo_url.length > 0
-      ? updates.photo_url
-      : existing.photo_url;
-  const storedPhotoUrl = await uploadPhotoIfNeeded(nextPhotoSource);
-
-  const updatedMeal = withDefaults({
-    ...existing,
-    ...updates,
-    id: existing.id,
-    created_date: existing.created_date,
-    photo_url: storedPhotoUrl
-  });
-
-  meals[index] = updatedMeal;
-  cachedMeals = meals;
-  writeToLocalStorage(meals);
-  notifyMealListeners();
-  return updatedMeal;
-}
-
-export async function clearMeals() {
-  cachedMeals = hydrateSeedData();
-  writeToLocalStorage(cachedMeals);
-  notifyMealListeners();
-  return cachedMeals;
-}
-
-export async function listDietPlans() {
-  const plans = await getDietPlans();
-
-  const sorted = [...plans].sort((a, b) => {
+function sortPlans(plans) {
+  const safePlans = Array.isArray(plans) ? [...plans] : [];
+  safePlans.sort((a, b) => {
     if (a.isActive && !b.isActive) return -1;
     if (!a.isActive && b.isActive) return 1;
 
@@ -693,8 +578,17 @@ export async function listDietPlans() {
     const bTime = new Date(b.created_at || b.createdAt || 0).getTime();
     return bTime - aTime;
   });
+  return safePlans;
+}
 
-  return sorted.map(clonePlan);
+async function refreshDietPlans() {
+  await loadDietPlans({ force: true });
+  return sortPlans(cachedDietPlans);
+}
+
+export async function listDietPlans() {
+  const plans = await loadDietPlans();
+  return sortPlans(plans).map(clonePlan);
 }
 
 export async function getDietPlanById(id) {
@@ -702,42 +596,47 @@ export async function getDietPlanById(id) {
     return null;
   }
 
-  const plans = await getDietPlans();
-  const found = plans.find((plan) => plan.id === id);
-  return found ? clonePlan(found) : null;
+  if (Array.isArray(cachedDietPlans)) {
+    const cached = cachedDietPlans.find((plan) => plan.id === id);
+    if (cached) {
+      return clonePlan(cached);
+    }
+  }
+
+  try {
+    const payload = await fetchJson(`/diet-plans/${encodeURIComponent(id)}`);
+    if (!payload?.data) {
+      return null;
+    }
+    await refreshDietPlans();
+    return clonePlan(withPlanDefaults(payload.data));
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 export async function getActiveDietPlan() {
-  const plans = await getDietPlans();
+  const plans = await loadDietPlans();
   const active = plans.find((plan) => plan.isActive);
   return active ? clonePlan(active) : null;
 }
 
 export async function createDietPlan(plan) {
-  const plans = await getDietPlans();
-  const now = new Date().toISOString();
-  const basePlan = {
-    ...plan,
-    id: `diet_plan_${generateId()}`,
-    created_at: now,
-    updated_at: now,
-    source: plan?.source || 'custom',
-  };
+  const payload = await fetchJson('/diet-plans', {
+    method: 'POST',
+    body: { plan }
+  });
 
-  const normalized = withPlanDefaults(basePlan, plans.length);
+  const saved = payload?.data ? payload.data : null;
+  if (!saved) {
+    throw new Error('The server did not return the saved plan.');
+  }
 
-  const nextPlans = normalized.isActive
-    ? plans.map((existing) =>
-        existing.isActive
-          ? { ...existing, isActive: false, updated_at: now }
-          : { ...existing },
-      )
-    : plans.map((existing) => ({ ...existing }));
-
-  const updated = [normalized, ...nextPlans];
-  cachedDietPlans = updated;
-  writePlansToLocalStorage(updated);
-  return clonePlan(normalized);
+  await refreshDietPlans();
+  return clonePlan(withPlanDefaults(saved));
 }
 
 export async function updateDietPlan(id, updates = {}) {
@@ -745,44 +644,18 @@ export async function updateDietPlan(id, updates = {}) {
     throw new Error('An id is required to update a diet plan.');
   }
 
-  const plans = await getDietPlans();
-  const index = plans.findIndex((plan) => plan.id === id);
-
-  if (index === -1) {
-    throw new Error('Diet plan not found.');
-  }
-
-  const now = new Date().toISOString();
-  const existing = plans[index];
-
-  const normalized = withPlanDefaults(
-    {
-      ...existing,
-      ...updates,
-      id: existing.id,
-      created_at: existing.created_at,
-      updated_at: now,
-      source: updates.source || existing.source,
-      isActive: typeof updates.isActive === 'boolean' ? updates.isActive : existing.isActive,
-    },
-    index,
-  );
-
-  const nextPlans = plans.map((plan) => {
-    if (plan.id === id) {
-      return normalized;
-    }
-
-    if (normalized.isActive && plan.isActive) {
-      return { ...plan, isActive: false, updated_at: now };
-    }
-
-    return { ...plan };
+  const payload = await fetchJson(`/diet-plans/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: { plan: updates }
   });
 
-  cachedDietPlans = nextPlans;
-  writePlansToLocalStorage(nextPlans);
-  return clonePlan(normalized);
+  const saved = payload?.data ? payload.data : null;
+  if (!saved) {
+    throw new Error('The server did not return the updated plan.');
+  }
+
+  await refreshDietPlans();
+  return clonePlan(withPlanDefaults(saved));
 }
 
 export async function setActiveDietPlan(id) {
@@ -790,29 +663,15 @@ export async function setActiveDietPlan(id) {
     throw new Error('An id is required to set the active diet plan.');
   }
 
-  const plans = await getDietPlans();
-  const now = new Date().toISOString();
-  let found = false;
-
-  const nextPlans = plans.map((plan) => {
-    if (plan.id === id) {
-      found = true;
-      return { ...plan, isActive: true, updated_at: now };
-    }
-
-    if (plan.isActive) {
-      return { ...plan, isActive: false, updated_at: now };
-    }
-
-    return { ...plan };
+  const payload = await fetchJson(`/diet-plans/${encodeURIComponent(id)}/activate`, {
+    method: 'POST'
   });
 
-  if (!found) {
-    throw new Error('Diet plan not found.');
+  const saved = payload?.data ? payload.data : null;
+  if (!saved) {
+    throw new Error('The server did not return the active plan.');
   }
 
-  cachedDietPlans = nextPlans;
-  writePlansToLocalStorage(nextPlans);
-  const active = nextPlans.find((plan) => plan.id === id);
-  return active ? clonePlan(active) : null;
+  await refreshDietPlans();
+  return clonePlan(withPlanDefaults(saved));
 }
