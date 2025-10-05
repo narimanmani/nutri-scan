@@ -1190,12 +1190,31 @@ function normalizeMealForStorage(meal, index = 0) {
   return normalized;
 }
 
+function parseJsonColumn(value, fallback = {}) {
+  if (value && typeof value === 'object') {
+    return { ...value };
+  }
+
+  if (typeof value === 'string' && value.length > 0) {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === 'object') {
+        return { ...parsed };
+      }
+    } catch (error) {
+      console.error('Failed to parse JSON column payload:', error, value);
+    }
+  }
+
+  return { ...fallback };
+}
+
 function deserializeMealRow(row, index = 0) {
   if (!row) {
     return null;
   }
 
-  const payload = typeof row.data === 'object' && row.data !== null ? { ...row.data } : {};
+  const payload = parseJsonColumn(row.data);
   const createdValue = row.created_date instanceof Date
     ? row.created_date.toISOString()
     : row.created_date || payload.created_date;
@@ -1297,7 +1316,7 @@ function deserializeDietPlanRow(row, index = 0) {
     return null;
   }
 
-  const payload = typeof row.data === 'object' && row.data !== null ? { ...row.data } : {};
+  const payload = parseJsonColumn(row.data);
   const createdAtValue = row.created_at instanceof Date
     ? row.created_at.toISOString()
     : row.created_at || payload.created_at;
