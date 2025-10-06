@@ -1094,18 +1094,44 @@ async function analyzeWithOpenAI({ imageDataUrl }) {
 const getSqlClient = (() => {
   let client;
 
+  function enhanceClient(sql) {
+    if (!sql || typeof sql !== 'function') {
+      throw new Error('Failed to initialize Netlify database client.');
+    }
+
+    if (typeof sql.json !== 'function') {
+      sql.json = (value) => JSON.stringify(value ?? null);
+    }
+
+    return sql;
+  }
+
   return () => {
     if (!client) {
-      const connectionString =
-        process.env.NETLIFY_DATABASE_URL ||
-        process.env.NETLIFY_DATABASE_URL_UNPOOLED ||
-        process.env.DATABASE_URL;
+      let initialized = null;
 
-      if (!connectionString) {
-        throw new Error('NETLIFY_DATABASE_URL is not configured.');
+      try {
+        initialized = neon();
+      } catch (error) {
+        if (error && error.message && !/NETLIFY_DATABASE_URL/.test(error.message)) {
+          console.warn('Falling back to explicit Netlify database connection string:', error);
+        }
       }
 
-      client = neon(connectionString);
+      if (!initialized) {
+        const connectionString =
+          process.env.NETLIFY_DATABASE_URL ||
+          process.env.NETLIFY_DATABASE_URL_UNPOOLED ||
+          process.env.DATABASE_URL;
+
+        if (!connectionString) {
+          throw new Error('NETLIFY_DATABASE_URL is not configured.');
+        }
+
+        initialized = neon(connectionString);
+      }
+
+      client = enhanceClient(initialized);
     }
 
     return client;
@@ -1336,9 +1362,7 @@ function deserializeDietPlanRow(row, index = 0) {
   );
 }
 
-async function initializeDatabase() {
-  const sql = getSqlClient();
-
+async function ensureTables(sql) {
   await sql`
     CREATE TABLE IF NOT EXISTS meals (
       id TEXT PRIMARY KEY,
@@ -1356,6 +1380,18 @@ async function initializeDatabase() {
       data JSONB NOT NULL
     )
   `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_meals_created_date ON meals (created_date DESC)
+  `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_diet_plans_active ON diet_plans (is_active DESC, created_at DESC)
+  `;
+}
+
+async function initializeDatabase(sql = getSqlClient()) {
+  await ensureTables(sql);
 
   const mealCountResult = await sql`SELECT COUNT(*)::int AS count FROM meals`;
   const mealCount = Number(mealCountResult?.[0]?.count || 0);
@@ -1401,9 +1437,9 @@ async function initializeDatabase() {
   }
 }
 
-async function ensureDatabase() {
+async function ensureDatabase(sql = getSqlClient()) {
   if (!schemaInitializationPromise) {
-    schemaInitializationPromise = initializeDatabase().catch((error) => {
+    schemaInitializationPromise = initializeDatabase(sql).catch((error) => {
       schemaInitializationPromise = null;
       throw error;
     });
@@ -1545,7 +1581,7 @@ async function handleMeals(event, subPath) {
 
   try {
     sql = getSqlClient();
-    await ensureDatabase();
+    await ensureDatabase(sql);
   } catch (error) {
     console.error('Failed to initialize the Netlify database client for meal operations:', error);
     return jsonResponse(500, {
@@ -1691,7 +1727,7 @@ async function handleDietPlans(event, subPath) {
 
   try {
     sql = getSqlClient();
-    await ensureDatabase();
+    await ensureDatabase(sql);
   } catch (error) {
     console.error('Failed to initialize the Netlify database client for diet plan operations:', error);
     return jsonResponse(500, {

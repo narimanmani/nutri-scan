@@ -364,14 +364,22 @@ function sortMeals(meals, order = '-created_date') {
   return safeMeals;
 }
 
-async function loadMeals({ force = false } = {}) {
+async function refreshMealsCache({ notify = true } = {}) {
+  const payload = await fetchJson(`/meals?ts=${Date.now()}`);
+  const rows = Array.isArray(payload?.data) ? payload.data : [];
+  cachedMeals = sortMeals(rows.map((meal) => withDefaults(meal)), '-created_date');
+  if (notify) {
+    notifyMealListeners();
+  }
+  return cachedMeals;
+}
+
+async function loadMeals({ force = false, notify = false } = {}) {
   if (!cachedMeals || force) {
-    const payload = await fetchJson('/meals');
-    const rows = Array.isArray(payload?.data) ? payload.data : [];
-    cachedMeals = rows.map((meal) => withDefaults(meal));
+    return refreshMealsCache({ notify });
   }
 
-  return cachedMeals || [];
+  return cachedMeals;
 }
 
 function insertMealIntoCache(meal) {
@@ -410,8 +418,11 @@ export function subscribeToMealChanges(listener, { immediate = false } = {}) {
   if (immediate) {
     (async () => {
       try {
-        await loadMeals();
-        listener(createMealsSnapshot());
+        const hadCache = Array.isArray(cachedMeals);
+        await loadMeals({ force: !hadCache, notify: true });
+        if (hadCache) {
+          listener(createMealsSnapshot());
+        }
       } catch (error) {
         console.error('Unable to deliver the initial meals snapshot to a listener:', error);
       }
@@ -446,7 +457,9 @@ export async function createMeal(meal) {
     throw new Error('The server did not return the saved meal.');
   }
 
-  return insertMealIntoCache(saved);
+  const normalized = insertMealIntoCache(saved);
+  await refreshMealsCache();
+  return normalized;
 }
 
 export async function getMealById(id) {
@@ -466,7 +479,9 @@ export async function getMealById(id) {
     if (!payload?.data) {
       return null;
     }
-    return insertMealIntoCache(payload.data);
+    const normalized = insertMealIntoCache(payload.data);
+    await refreshMealsCache();
+    return normalized;
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
       return null;
@@ -508,7 +523,9 @@ export async function updateMeal(id, updates = {}) {
     throw new Error('The server did not return the updated meal.');
   }
 
-  return insertMealIntoCache(saved);
+  const normalized = insertMealIntoCache(saved);
+  await refreshMealsCache();
+  return normalized;
 }
 
 export async function deleteMeal(id) {
@@ -518,6 +535,7 @@ export async function deleteMeal(id) {
 
   await fetchJson(`/meals/${encodeURIComponent(id)}`, { method: 'DELETE' });
   removeMealFromCache(id);
+  await refreshMealsCache();
 }
 
 function normalizeMacroTargets(targets = {}) {
@@ -623,11 +641,16 @@ function clonePlan(plan) {
   };
 }
 
+async function refreshDietPlanCache() {
+  const payload = await fetchJson(`/diet-plans?ts=${Date.now()}`);
+  const rows = Array.isArray(payload?.data) ? payload.data : [];
+  cachedDietPlans = rows.map((plan, index) => withPlanDefaults(plan, index));
+  return cachedDietPlans;
+}
+
 async function loadDietPlans({ force = false } = {}) {
   if (!cachedDietPlans || force) {
-    const payload = await fetchJson('/diet-plans');
-    const rows = Array.isArray(payload?.data) ? payload.data : [];
-    cachedDietPlans = rows.map((plan, index) => withPlanDefaults(plan, index));
+    await refreshDietPlanCache();
   }
 
   return cachedDietPlans || [];
@@ -647,7 +670,7 @@ function sortPlans(plans) {
 }
 
 async function refreshDietPlans() {
-  await loadDietPlans({ force: true });
+  await refreshDietPlanCache();
   return sortPlans(cachedDietPlans);
 }
 
