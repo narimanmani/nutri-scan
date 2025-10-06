@@ -14,7 +14,6 @@ import DateNavigator from '@/components/dashboard/DateNavigator';
 import AddDietPlanDialog from '@/components/diet/AddDietPlanDialog';
 import MacroTrendCharts from '@/components/diet/MacroTrendCharts';
 
-import dietPlanTemplates from '@/data/dietPlans.json';
 import { buildDashboardStats } from '@/utils/stats';
 import { buildDietPlanEvaluation, formatMacroDifference } from '@/utils/dietPlan';
 
@@ -57,6 +56,7 @@ export default function DietPlans() {
   const [activePlan, setActivePlan] = useState(null);
   const [selectedPlanId, setSelectedPlanId] = useState(null);
   const [meals, setMeals] = useState([]);
+  const [templates, setTemplates] = useState([]);
   const [selectedDate, setSelectedDate] = useState(() => startOfDay(new Date()));
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -67,8 +67,9 @@ export default function DietPlans() {
     async function initialize() {
       setIsLoading(true);
       try {
-        const [planList, mealList] = await Promise.all([
+        const [planList, templateList, mealList] = await Promise.all([
           DietPlan.list(),
+          DietPlan.listTemplates(),
           Meal.list('-created_date', 200),
         ]);
 
@@ -86,6 +87,7 @@ export default function DietPlans() {
           return active?.id || null;
         });
         setMeals(mealList);
+        setTemplates(templateList);
       } catch (error) {
         console.error('Failed to load plans or meals', error);
         toast({
@@ -148,15 +150,24 @@ export default function DietPlans() {
   const handlePlanCreated = async (newPlan) => {
     try {
       const saved = await DietPlan.create(newPlan);
-      const planList = await DietPlan.list();
+      const [planList, templateList] = await Promise.all([
+        DietPlan.list(),
+        DietPlan.listTemplates(),
+      ]);
       const active = planList.find((plan) => plan.isActive) || null;
       setPlans(planList);
       setActivePlan(active);
-      setSelectedPlanId(saved?.id || active?.id || planList[0]?.id || null);
+      setSelectedPlanId((current) => {
+        if (current && planList.some((plan) => plan.id === current)) {
+          return current;
+        }
+        return saved?.id || active?.id || planList[0]?.id || null;
+      });
       toast({
         title: 'Plan saved',
         description: `${saved?.name || newPlan.name} was added to your plans.`,
       });
+      setTemplates(templateList);
     } catch (error) {
       console.error('Failed to save plan', error);
       toast({
@@ -171,7 +182,10 @@ export default function DietPlans() {
   const handleSetActivePlan = async (planId) => {
     try {
       const updated = await DietPlan.setActive(planId);
-      const planList = await DietPlan.list();
+      const [planList, templateList] = await Promise.all([
+        DietPlan.list(),
+        DietPlan.listTemplates(),
+      ]);
       setPlans(planList);
       setActivePlan(updated);
       setSelectedPlanId(updated?.id || planId);
@@ -179,6 +193,7 @@ export default function DietPlans() {
         title: 'Active plan updated',
         description: `${updated?.name || 'Selected plan'} is now active.`,
       });
+      setTemplates(templateList);
     } catch (error) {
       console.error('Unable to set active plan', error);
       toast({
@@ -474,7 +489,7 @@ export default function DietPlans() {
       <AddDietPlanDialog
         open={isDialogOpen}
         onOpenChange={setIsDialogOpen}
-        templates={dietPlanTemplates}
+        templates={templates}
         onSubmit={handlePlanCreated}
       />
     </div>
