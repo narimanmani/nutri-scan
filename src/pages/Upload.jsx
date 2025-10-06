@@ -79,15 +79,38 @@ export default function UploadPage() {
   const handleSaveMeal = async (mealData) => {
     setIsSaving(true);
     setError(null);
-    
+
     try {
       await Meal.create(mealData);
       navigate(createPageUrl("Dashboard"));
     } catch (error) {
-      setError("Failed to save meal. Please try again.");
       console.error("Save error:", error);
+
+      const fallback = "Failed to save meal.";
+      const uniqueMessages = new Set();
+      const parts = [fallback];
+
+      const appendMessage = (message) => {
+        if (typeof message !== "string") {
+          return;
+        }
+
+        const trimmed = message.trim();
+        if (!trimmed || uniqueMessages.has(trimmed) || trimmed === fallback) {
+          return;
+        }
+
+        uniqueMessages.add(trimmed);
+        parts.push(trimmed);
+      };
+
+      appendMessage(error?.message);
+      appendMessage(error?.payload?.error);
+      appendMessage(error?.payload?.details?.message);
+
+      setError(parts.join(" "));
     }
-    
+
     setIsSaving(false);
   };
 
