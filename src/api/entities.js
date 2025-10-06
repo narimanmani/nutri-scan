@@ -3,13 +3,16 @@ import {
   createMeal,
   getMealById,
   updateMeal,
+  deleteMeal,
   subscribeToMealChanges,
   listDietPlans,
+  listDietPlanTemplates,
   createDietPlan,
   updateDietPlan,
   setActiveDietPlan,
   getActiveDietPlan,
   getDietPlanById,
+  deleteDietPlan,
 } from './storage';
 
 export const Meal = {
@@ -17,6 +20,7 @@ export const Meal = {
   create: (meal) => createMeal(meal),
   get: (id) => getMealById(id),
   update: (id, updates) => updateMeal(id, updates),
+  delete: (id) => deleteMeal(id),
   subscribe: (listener, options) => subscribeToMealChanges(listener, options)
 };
 
@@ -27,10 +31,12 @@ export const User = {
 };
 
 export const DietPlan = {
-  list: () => listDietPlans(),
+  list: (options) => listDietPlans(options),
+  listTemplates: () => listDietPlanTemplates(),
   get: (id) => getDietPlanById(id),
   create: (plan) => createDietPlan(plan),
   update: (id, updates) => updateDietPlan(id, updates),
   setActive: (id) => setActiveDietPlan(id),
   getActive: () => getActiveDietPlan(),
+  delete: (id) => deleteDietPlan(id),
 };
