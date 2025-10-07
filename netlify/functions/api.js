@@ -1,5 +1,8 @@
 const { getStore } = require('@netlify/blobs');
+const { neon } = require('@netlify/neon');
 const crypto = require('crypto');
+const mealsSeed = require('../../src/data/meals.json');
+const dietPlansSeed = require('../../src/data/dietPlans.json');
 
 const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 20000);
 const OPENAI_ANALYSIS_TIMEOUT_MS = Number(
@@ -119,6 +122,13 @@ const NUTRIENT_FIELDS = [
   'vitamin_c',
   'vitamin_a'
 ];
+
+function generateId() {
+  if (typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
 
 const DEFAULT_SUGGESTION_LIMIT = 7;
 const OPENAI_SUGGESTION_MODEL = process.env.OPENAI_SUGGESTION_MODEL || 'gpt-4o-mini';
@@ -314,7 +324,7 @@ const MOCK_RESPONSE = {
 function normalizeIngredient(ingredient, index = 0) {
   const safe = typeof ingredient === 'object' && ingredient !== null ? { ...ingredient } : {};
   const normalized = {
-    id: typeof safe.id === 'string' && safe.id.length > 0 ? safe.id : `ingredient_${Date.now()}_${index}`,
+    id: typeof safe.id === 'string' && safe.id.length > 0 ? safe.id : `ingredient_${generateId()}`,
     name:
       typeof safe.name === 'string' && safe.name.length > 0
         ? safe.name
@@ -1081,6 +1091,440 @@ async function analyzeWithOpenAI({ imageDataUrl }) {
   return cacheAnalysis(cacheKey, ensureNumbers(parsed));
 }
 
+const getSqlClient = (() => {
+  let client;
+
+  function enhanceClient(sql) {
+    if (!sql || typeof sql !== 'function') {
+      throw new Error('Failed to initialize Netlify database client.');
+    }
+
+    if (typeof sql.json !== 'function') {
+      sql.json = (value) => JSON.stringify(value ?? null);
+    }
+
+    return sql;
+  }
+
+  return () => {
+    if (!client) {
+      let initialized = null;
+
+      try {
+        initialized = neon();
+      } catch (error) {
+        if (error && error.message && !/NETLIFY_DATABASE_URL/.test(error.message)) {
+          console.warn('Falling back to explicit Netlify database connection string:', error);
+        }
+      }
+
+      if (!initialized) {
+        const connectionString =
+          process.env.NETLIFY_DATABASE_URL ||
+          process.env.NETLIFY_DATABASE_URL_UNPOOLED ||
+          process.env.DATABASE_URL;
+
+        if (!connectionString) {
+          throw new Error('NETLIFY_DATABASE_URL is not configured.');
+        }
+
+        initialized = neon(connectionString);
+      }
+
+      client = enhanceClient(initialized);
+    }
+
+    return client;
+  };
+})();
+
+function serializeForJsonb(value) {
+  try {
+    return JSON.stringify(value ?? null);
+  } catch (error) {
+    console.error('Failed to serialize value for jsonb column.', error, value);
+    return JSON.stringify(null);
+  }
+}
+
+let schemaInitializationPromise = null;
+
+function normalizeIngredientsList(ingredients = []) {
+  if (!Array.isArray(ingredients) || ingredients.length === 0) {
+    return [];
+  }
+
+  return ingredients.map((ingredient, index) => normalizeIngredient(ingredient, index));
+}
+
+function normalizeMealForStorage(meal, index = 0) {
+  const safe = typeof meal === 'object' && meal !== null ? { ...meal } : {};
+  const createdSource = safe.created_date || safe.createdDate || safe.meal_date;
+  const createdDate = createdSource ? new Date(createdSource) : new Date();
+  const createdIso = Number.isNaN(createdDate.getTime()) ? new Date().toISOString() : createdDate.toISOString();
+
+  const normalizedIngredients = normalizeIngredientsList(safe.ingredients);
+  const totals = normalizedIngredients.length > 0 ? sumNutrients(normalizedIngredients) : null;
+
+  const normalized = {
+    id: typeof safe.id === 'string' && safe.id.length > 0 ? safe.id : `meal_${generateId()}`,
+    meal_name: typeof safe.meal_name === 'string' ? safe.meal_name : '',
+    meal_type: typeof safe.meal_type === 'string' ? safe.meal_type : 'lunch',
+    analysis_notes: typeof safe.analysis_notes === 'string' ? safe.analysis_notes : '',
+    notes: typeof safe.notes === 'string' ? safe.notes : '',
+    photo_url: typeof safe.photo_url === 'string' ? safe.photo_url : '',
+    created_date: createdIso,
+    ingredients: normalizedIngredients
+  };
+
+  NUTRIENT_FIELDS.forEach((field) => {
+    const provided = Number(safe[field]);
+    normalized[field] = Number.isFinite(provided)
+      ? provided
+      : totals
+        ? totals[field]
+        : 0;
+  });
+
+  if (totals) {
+    NUTRIENT_FIELDS.forEach((field) => {
+      normalized[field] = totals[field];
+    });
+  }
+
+  if (normalized.ingredients.length === 0) {
+    normalized.ingredients = [
+      normalizeIngredient(
+        {
+          name: normalized.meal_name || 'Meal serving',
+          unit: 'serving',
+          amount: 1,
+          ...NUTRIENT_FIELDS.reduce(
+            (acc, field) => ({
+              ...acc,
+              [field]: Number.isFinite(Number(normalized[field])) ? Number(normalized[field]) : 0
+            }),
+            {}
+          )
+        },
+        0
+      )
+    ];
+  }
+
+  return normalized;
+}
+
+function parseJsonColumn(value, fallback = {}) {
+  if (value && typeof value === 'object') {
+    return { ...value };
+  }
+
+  if (typeof value === 'string' && value.length > 0) {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === 'object') {
+        return { ...parsed };
+      }
+    } catch (error) {
+      console.error('Failed to parse JSON column payload:', error, value);
+    }
+  }
+
+  return { ...fallback };
+}
+
+function deserializeMealRow(row, index = 0) {
+  if (!row) {
+    return null;
+  }
+
+  const payload = parseJsonColumn(row.data);
+  const createdValue = row.created_date instanceof Date
+    ? row.created_date.toISOString()
+    : row.created_date || payload.created_date;
+
+  return normalizeMealForStorage(
+    {
+      ...payload,
+      id: row.id,
+      created_date: createdValue
+    },
+    index
+  );
+}
+
+function normalizeMacroTargetsForStorage(targets = {}) {
+  if (!targets || typeof targets !== 'object') {
+    return {};
+  }
+
+  return Object.entries(targets).reduce((acc, [key, value]) => {
+    const normalizedKey = typeof key === 'string' && key.length > 0 ? key.toLowerCase() : key;
+    const numericValue = Number(value);
+    acc[normalizedKey] = Number.isFinite(numericValue) ? Math.round(numericValue) : 0;
+    return acc;
+  }, {});
+}
+
+function normalizeMealGuidanceForStorage(entries = []) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+
+  return entries
+    .map((entry, index) => {
+      const safe = typeof entry === 'object' && entry !== null ? entry : {};
+      const name = typeof safe.name === 'string' && safe.name.length > 0
+        ? safe.name
+        : `Meal ${index + 1}`;
+      const description = typeof safe.description === 'string' ? safe.description : '';
+
+      if (!name && !description) {
+        return null;
+      }
+
+      return { name, description };
+    })
+    .filter(Boolean);
+}
+
+function normalizeDietPlanForStorage(plan, index = 0) {
+  const safe = typeof plan === 'object' && plan !== null ? { ...plan } : {};
+  const createdSource = safe.created_at || safe.createdAt;
+  const updatedSource = safe.updated_at || safe.updatedAt;
+  const createdAt = createdSource ? new Date(createdSource) : new Date();
+  const updatedAt = updatedSource ? new Date(updatedSource) : new Date();
+
+  const normalizedTargets = normalizeMacroTargetsForStorage(safe.macroTargets || safe.targets);
+  const hasTargets = Object.keys(normalizedTargets).length > 0;
+
+  const normalized = {
+    id:
+      typeof safe.id === 'string' && safe.id.length > 0
+        ? safe.id
+        : `diet_plan_${generateId()}`,
+    name:
+      typeof safe.name === 'string' && safe.name.length > 0
+        ? safe.name
+        : `Diet Plan ${index + 1}`,
+    goal: typeof safe.goal === 'string' ? safe.goal : '',
+    description: typeof safe.description === 'string' ? safe.description : '',
+    macroTargets: hasTargets
+      ? normalizedTargets
+      : {
+          calories: 2000,
+          protein: 100,
+          carbs: 220,
+          fat: 70,
+        },
+    hydrationTarget: Number.isFinite(Number(safe.hydrationTarget))
+      ? Number(safe.hydrationTarget)
+      : 8,
+    focus: Array.isArray(safe.focus) ? safe.focus.map((item) => String(item)) : [],
+    mealGuidance: normalizeMealGuidanceForStorage(safe.mealGuidance),
+    tips: Array.isArray(safe.tips) ? safe.tips.map((item) => String(item)) : [],
+    created_at: Number.isNaN(createdAt.getTime()) ? new Date().toISOString() : createdAt.toISOString(),
+    updated_at: Number.isNaN(updatedAt.getTime()) ? new Date().toISOString() : updatedAt.toISOString(),
+    isActive: Boolean(safe.isActive),
+    source:
+      typeof safe.source === 'string' && safe.source.length > 0
+        ? safe.source
+        : 'template',
+  };
+
+  return normalized;
+}
+
+function deserializeDietPlanRow(row, index = 0) {
+  if (!row) {
+    return null;
+  }
+
+  const payload = parseJsonColumn(row.data);
+  const createdAtValue = row.created_at instanceof Date
+    ? row.created_at.toISOString()
+    : row.created_at || payload.created_at;
+  const updatedAtValue = row.updated_at instanceof Date
+    ? row.updated_at.toISOString()
+    : row.updated_at || payload.updated_at;
+  const isActive = typeof row.is_active === 'boolean' ? row.is_active : Boolean(payload.isActive);
+
+  return normalizeDietPlanForStorage(
+    {
+      ...payload,
+      id: row.id,
+      created_at: createdAtValue,
+      updated_at: updatedAtValue,
+      isActive
+    },
+    index
+  );
+}
+
+async function ensureTables(sql) {
+  await sql`
+    CREATE TABLE IF NOT EXISTS meals (
+      id TEXT PRIMARY KEY,
+      created_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      data JSONB NOT NULL
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS diet_plans (
+      id TEXT PRIMARY KEY,
+      is_active BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      data JSONB NOT NULL
+    )
+  `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_meals_created_date ON meals (created_date DESC)
+  `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_diet_plans_active ON diet_plans (is_active DESC, created_at DESC)
+  `;
+}
+
+async function initializeDatabase(sql = getSqlClient()) {
+  await ensureTables(sql);
+
+  const mealCountResult = await sql`SELECT COUNT(*)::int AS count FROM meals`;
+  const mealCount = Number(mealCountResult?.[0]?.count || 0);
+
+  if (mealCount === 0 && Array.isArray(mealsSeed)) {
+    for (let index = 0; index < mealsSeed.length; index += 1) {
+      const normalized = normalizeMealForStorage(mealsSeed[index], index);
+      await sql.query(
+        `
+          INSERT INTO meals (id, created_date, data)
+          VALUES ($1, $2, $3::jsonb)
+          ON CONFLICT (id) DO NOTHING
+        `,
+        [normalized.id, normalized.created_date, serializeForJsonb(normalized)]
+      );
+    }
+  }
+
+  const planCountResult = await sql`SELECT COUNT(*)::int AS count FROM diet_plans`;
+  const planCount = Number(planCountResult?.[0]?.count || 0);
+
+  if (planCount === 0 && Array.isArray(dietPlansSeed)) {
+    const seededPlans = dietPlansSeed.map((plan, index) =>
+      normalizeDietPlanForStorage(
+        {
+          ...plan,
+          isActive: index === 0,
+          created_at: plan?.created_at || plan?.createdAt || new Date().toISOString(),
+          updated_at: plan?.updated_at || plan?.updatedAt || new Date().toISOString(),
+        },
+        index
+      )
+    );
+
+    if (!seededPlans.some((plan) => plan.isActive) && seededPlans.length > 0) {
+      seededPlans[0].isActive = true;
+    }
+
+    for (const plan of seededPlans) {
+      await sql.query(
+        `
+          INSERT INTO diet_plans (id, is_active, created_at, updated_at, data)
+          VALUES ($1, $2, $3, $4, $5::jsonb)
+          ON CONFLICT (id) DO NOTHING
+        `,
+        [plan.id, plan.isActive, plan.created_at, plan.updated_at, serializeForJsonb(plan)]
+      );
+    }
+  }
+}
+
+async function ensureDatabase(sql = getSqlClient()) {
+  if (!schemaInitializationPromise) {
+    schemaInitializationPromise = initializeDatabase(sql).catch((error) => {
+      schemaInitializationPromise = null;
+      throw error;
+    });
+  }
+
+  return schemaInitializationPromise;
+}
+
+function extractRows(result) {
+  if (!result) {
+    return [];
+  }
+
+  if (Array.isArray(result)) {
+    return result;
+  }
+
+  if (Array.isArray(result.rows)) {
+    return result.rows;
+  }
+
+  return [];
+}
+
+async function upsertMeal(sql, meal) {
+  const result = await sql.query(
+    `
+      INSERT INTO meals (id, created_date, data)
+      VALUES ($1, $2, $3::jsonb)
+      ON CONFLICT (id) DO UPDATE
+        SET created_date = EXCLUDED.created_date,
+            data = EXCLUDED.data
+      RETURNING id, created_date, data
+    `,
+    [meal.id, meal.created_date, serializeForJsonb(meal)]
+  );
+
+  const rows = extractRows(result);
+
+  if (rows && rows.length > 0) {
+    return deserializeMealRow(rows[0]);
+  }
+
+  return normalizeMealForStorage(meal);
+}
+
+async function upsertDietPlan(sql, plan) {
+  const result = await sql.query(
+    `
+      INSERT INTO diet_plans (id, is_active, created_at, updated_at, data)
+      VALUES ($1, $2, $3, $4, $5::jsonb)
+      ON CONFLICT (id) DO UPDATE
+        SET is_active = EXCLUDED.is_active,
+            updated_at = EXCLUDED.updated_at,
+            data = EXCLUDED.data
+      RETURNING id, is_active, created_at, updated_at, data
+    `,
+    [plan.id, plan.isActive, plan.created_at, plan.updated_at, serializeForJsonb(plan)]
+  );
+
+  const rows = extractRows(result);
+
+  if (plan.isActive) {
+    await sql`
+      UPDATE diet_plans
+      SET is_active = FALSE,
+          updated_at = ${plan.updated_at},
+          data = jsonb_set(data, '{isActive}', 'false'::jsonb, true)
+      WHERE id <> ${plan.id} AND is_active = TRUE
+    `;
+  }
+
+  if (rows && rows.length > 0) {
+    return deserializeDietPlanRow(rows[0]);
+  }
+
+  return normalizeDietPlanForStorage(plan);
+}
+
 function jsonResponse(statusCode, body) {
   return {
     statusCode,
@@ -1091,6 +1535,59 @@ function jsonResponse(statusCode, body) {
     },
     body: JSON.stringify(body)
   };
+}
+
+function formatErrorForResponse(error, seen = new WeakSet()) {
+  if (!error || typeof error !== 'object') {
+    return { message: typeof error === 'string' ? error : 'Unknown error' };
+  }
+
+  if (seen.has(error)) {
+    return { message: 'Circular error reference detected.' };
+  }
+  seen.add(error);
+
+  const formatted = {
+    message:
+      typeof error.message === 'string' && error.message.length > 0
+        ? error.message
+        : 'Unknown error',
+  };
+
+  if (typeof error.name === 'string' && error.name.length > 0) {
+    formatted.name = error.name;
+  }
+
+  if (typeof error.code !== 'undefined' && error.code !== null) {
+    formatted.code = String(error.code);
+  }
+
+  if (typeof error.status === 'number' && Number.isFinite(error.status)) {
+    formatted.status = error.status;
+  }
+
+  if (
+    typeof error.statusCode === 'number' &&
+    Number.isFinite(error.statusCode) &&
+    error.statusCode !== error.status
+  ) {
+    formatted.statusCode = error.statusCode;
+  }
+
+  if (typeof error.stack === 'string' && error.stack.length > 0) {
+    formatted.stack = error.stack
+      .split('\n')
+      .slice(0, 5)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  if (typeof error.cause === 'object' && error.cause) {
+    formatted.cause = formatErrorForResponse(error.cause, seen);
+  }
+
+  return formatted;
 }
 
 function resolveSubPath(event) {
@@ -1107,6 +1604,378 @@ function resolveSubPath(event) {
   return normalized.startsWith('/') ? normalized : `/${normalized}`;
 }
 
+async function handleMeals(event, subPath) {
+  if (!subPath.startsWith('/meals')) {
+    return null;
+  }
+
+  let sql;
+
+  try {
+    sql = getSqlClient();
+    await ensureDatabase(sql);
+  } catch (error) {
+    console.error('Failed to initialize the Netlify database client for meal operations:', error);
+    return jsonResponse(500, {
+      error:
+        'Unable to connect to the Netlify Database. Please verify that NETLIFY_DATABASE_URL is configured correctly.',
+      details: formatErrorForResponse(error),
+    });
+  }
+
+  try {
+    if (event.httpMethod === 'GET' && (subPath === '/meals' || subPath === '/meals/')) {
+      const order = typeof event.queryStringParameters?.order === 'string'
+        ? event.queryStringParameters.order
+        : '-created_date';
+      const direction = order.startsWith('-') ? 'DESC' : 'ASC';
+      const limitValue = Number(event.queryStringParameters?.limit);
+      const hasLimit = Number.isFinite(limitValue) && limitValue > 0;
+
+      let rows;
+      if (direction === 'ASC') {
+        if (hasLimit) {
+          rows = await sql`
+            SELECT id, created_date, data
+            FROM meals
+            ORDER BY created_date ASC
+            LIMIT ${limitValue}
+          `;
+        } else {
+          rows = await sql`
+            SELECT id, created_date, data
+            FROM meals
+            ORDER BY created_date ASC
+          `;
+        }
+      } else if (hasLimit) {
+        rows = await sql`
+          SELECT id, created_date, data
+          FROM meals
+          ORDER BY created_date DESC
+          LIMIT ${limitValue}
+        `;
+      } else {
+        rows = await sql`
+          SELECT id, created_date, data
+          FROM meals
+          ORDER BY created_date DESC
+        `;
+      }
+
+      return jsonResponse(200, {
+        data: rows.map((row, index) => deserializeMealRow(row, index))
+      });
+    }
+
+    if (event.httpMethod === 'POST' && (subPath === '/meals' || subPath === '/meals/')) {
+      let payload;
+      try {
+        payload = JSON.parse(event.body || '{}');
+      } catch (error) {
+        return jsonResponse(400, { error: 'Invalid request payload.' });
+      }
+
+      const mealInput = payload?.meal;
+      if (!mealInput || typeof mealInput !== 'object') {
+        return jsonResponse(400, { error: 'meal payload is required.' });
+      }
+
+      const normalized = normalizeMealForStorage({ ...mealInput });
+      const savedMeal = await upsertMeal(sql, normalized);
+
+      return jsonResponse(201, { data: savedMeal });
+    }
+
+    const mealMatch = subPath.match(/^\/meals\/([^/]+)$/);
+    if (mealMatch) {
+      const mealId = decodeURIComponent(mealMatch[1]);
+
+      if (event.httpMethod === 'GET') {
+        const rows = await sql`
+          SELECT id, created_date, data
+          FROM meals
+          WHERE id = ${mealId}
+          LIMIT 1
+        `;
+
+        if (!rows || rows.length === 0) {
+          return jsonResponse(404, { error: 'Meal not found.' });
+        }
+
+        return jsonResponse(200, { data: deserializeMealRow(rows[0]) });
+      }
+
+      if (event.httpMethod === 'PUT') {
+        let payload;
+        try {
+          payload = JSON.parse(event.body || '{}');
+        } catch (error) {
+          return jsonResponse(400, { error: 'Invalid request payload.' });
+        }
+
+        const mealUpdates = payload?.meal;
+        if (!mealUpdates || typeof mealUpdates !== 'object') {
+          return jsonResponse(400, { error: 'meal payload is required.' });
+        }
+
+        const existingRows = await sql`
+          SELECT id, created_date, data
+          FROM meals
+          WHERE id = ${mealId}
+          LIMIT 1
+        `;
+
+        if (!existingRows || existingRows.length === 0) {
+          return jsonResponse(404, { error: 'Meal not found.' });
+        }
+
+        const existing = deserializeMealRow(existingRows[0]);
+        const normalized = normalizeMealForStorage(
+          {
+            ...existing,
+            ...mealUpdates,
+            id: existing.id,
+            created_date: existing.created_date
+          }
+        );
+
+        const savedMeal = await upsertMeal(sql, normalized);
+
+        return jsonResponse(200, { data: savedMeal });
+      }
+
+      if (event.httpMethod === 'DELETE') {
+        const deleteResult = await sql`
+          DELETE FROM meals
+          WHERE id = ${mealId}
+          RETURNING id
+        `;
+
+        if (!deleteResult || deleteResult.length === 0) {
+          return jsonResponse(404, { error: 'Meal not found.' });
+        }
+
+        return jsonResponse(200, { data: { id: mealId }, success: true });
+      }
+    }
+  } catch (error) {
+    console.error('Failed to process meal request via Netlify function:', error);
+    return jsonResponse(500, {
+      error: 'Failed to process the meal request. Please try again or check the Netlify Database configuration.',
+      details: formatErrorForResponse(error),
+      request: {
+        method: event.httpMethod,
+        path: subPath,
+      },
+    });
+  }
+
+  return null;
+}
+
+async function handleDietPlans(event, subPath) {
+  if (!subPath.startsWith('/diet-plans')) {
+    return null;
+  }
+
+  let sql;
+
+  try {
+    sql = getSqlClient();
+    await ensureDatabase(sql);
+  } catch (error) {
+    console.error('Failed to initialize the Netlify database client for diet plan operations:', error);
+    return jsonResponse(500, {
+      error:
+        'Unable to connect to the Netlify Database. Please verify that NETLIFY_DATABASE_URL is configured correctly.',
+      details: formatErrorForResponse(error),
+    });
+  }
+
+  try {
+    if (event.httpMethod === 'GET' && (subPath === '/diet-plans' || subPath === '/diet-plans/')) {
+      const rows = await sql`
+        SELECT id, is_active, created_at, updated_at, data
+        FROM diet_plans
+        ORDER BY is_active DESC, created_at DESC
+      `;
+
+      const rawPlans = rows.map((row, index) => deserializeDietPlanRow(row, index));
+      const queryParams = event.queryStringParameters || {};
+      const sourceFilter =
+        typeof queryParams.source === 'string' && queryParams.source.trim().length > 0
+          ? queryParams.source.trim()
+          : '';
+      const excludeSource =
+        typeof queryParams.exclude_source === 'string' && queryParams.exclude_source.trim().length > 0
+          ? queryParams.exclude_source.trim()
+          : '';
+
+      const filteredPlans = rawPlans.filter((plan) => {
+        if (!plan) {
+          return false;
+        }
+
+        if (sourceFilter && plan.source !== sourceFilter) {
+          return false;
+        }
+
+        if (excludeSource && plan.source === excludeSource) {
+          return false;
+        }
+
+        return true;
+      });
+
+      return jsonResponse(200, {
+        data: filteredPlans
+      });
+    }
+
+    if (event.httpMethod === 'POST' && (subPath === '/diet-plans' || subPath === '/diet-plans/')) {
+      let payload;
+      try {
+        payload = JSON.parse(event.body || '{}');
+      } catch (error) {
+        return jsonResponse(400, { error: 'Invalid request payload.' });
+      }
+
+      const planInput = payload?.plan;
+      if (!planInput || typeof planInput !== 'object') {
+        return jsonResponse(400, { error: 'plan payload is required.' });
+      }
+
+      const nowIso = new Date().toISOString();
+      const normalized = normalizeDietPlanForStorage({
+        ...planInput,
+        id: planInput.id || `diet_plan_${generateId()}`,
+        source: planInput.source || 'custom',
+        created_at: planInput.created_at || planInput.createdAt || nowIso,
+        updated_at: nowIso,
+      });
+
+      const savedPlan = await upsertDietPlan(sql, normalized);
+
+      return jsonResponse(201, { data: savedPlan });
+    }
+
+    const activateMatch = subPath.match(/^\/diet-plans\/([^/]+)\/activate$/);
+    if (activateMatch) {
+      const planId = decodeURIComponent(activateMatch[1]);
+
+      const rows = await sql`
+        SELECT id, is_active, created_at, updated_at, data
+        FROM diet_plans
+        WHERE id = ${planId}
+        LIMIT 1
+      `;
+
+      if (!rows || rows.length === 0) {
+        return jsonResponse(404, { error: 'Diet plan not found.' });
+      }
+
+      const existing = deserializeDietPlanRow(rows[0]);
+      const normalized = normalizeDietPlanForStorage({
+        ...existing,
+        isActive: true,
+        updated_at: new Date().toISOString(),
+      });
+
+      const savedPlan = await upsertDietPlan(sql, normalized);
+
+      return jsonResponse(200, { data: savedPlan });
+    }
+
+    const planMatch = subPath.match(/^\/diet-plans\/([^/]+)$/);
+    if (planMatch) {
+      const planId = decodeURIComponent(planMatch[1]);
+
+      if (event.httpMethod === 'GET') {
+        const rows = await sql`
+          SELECT id, is_active, created_at, updated_at, data
+          FROM diet_plans
+          WHERE id = ${planId}
+          LIMIT 1
+        `;
+
+        if (!rows || rows.length === 0) {
+          return jsonResponse(404, { error: 'Diet plan not found.' });
+        }
+
+        return jsonResponse(200, { data: deserializeDietPlanRow(rows[0]) });
+      }
+
+      if (event.httpMethod === 'PUT') {
+        let payload;
+        try {
+          payload = JSON.parse(event.body || '{}');
+        } catch (error) {
+          return jsonResponse(400, { error: 'Invalid request payload.' });
+        }
+
+        const planUpdates = payload?.plan;
+        if (!planUpdates || typeof planUpdates !== 'object') {
+          return jsonResponse(400, { error: 'plan payload is required.' });
+        }
+
+        const rows = await sql`
+          SELECT id, is_active, created_at, updated_at, data
+          FROM diet_plans
+          WHERE id = ${planId}
+          LIMIT 1
+        `;
+
+        if (!rows || rows.length === 0) {
+          return jsonResponse(404, { error: 'Diet plan not found.' });
+        }
+
+        const existing = deserializeDietPlanRow(rows[0]);
+        const nowIso = new Date().toISOString();
+        const normalized = normalizeDietPlanForStorage({
+          ...existing,
+          ...planUpdates,
+          id: existing.id,
+          created_at: existing.created_at,
+          updated_at: nowIso,
+          source: planUpdates.source || existing.source,
+          isActive: typeof planUpdates.isActive === 'boolean' ? planUpdates.isActive : existing.isActive,
+        });
+
+        const savedPlan = await upsertDietPlan(sql, normalized);
+
+        return jsonResponse(200, { data: savedPlan });
+      }
+
+      if (event.httpMethod === 'DELETE') {
+        const deleteResult = await sql`
+          DELETE FROM diet_plans
+          WHERE id = ${planId}
+          RETURNING id
+        `;
+
+        if (!deleteResult || deleteResult.length === 0) {
+          return jsonResponse(404, { error: 'Diet plan not found.' });
+        }
+
+        return jsonResponse(200, { data: { id: planId }, success: true });
+      }
+    }
+  } catch (error) {
+    console.error('Failed to process diet plan request via Netlify function:', error);
+    return jsonResponse(500, {
+      error: 'Failed to process the diet plan request. Please try again or check the Netlify Database configuration.',
+      details: formatErrorForResponse(error),
+      request: {
+        method: event.httpMethod,
+        path: subPath,
+      },
+    });
+  }
+
+  return null;
+}
+
 exports.handler = async function handler(event) {
   const subPath = resolveSubPath(event);
 
@@ -1115,10 +1984,20 @@ exports.handler = async function handler(event) {
       statusCode: 204,
       headers: {
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type'
       }
     };
+  }
+
+  const mealResponse = await handleMeals(event, subPath);
+  if (mealResponse) {
+    return mealResponse;
+  }
+
+  const dietPlanResponse = await handleDietPlans(event, subPath);
+  if (dietPlanResponse) {
+    return dietPlanResponse;
   }
 
   if (subPath === '/analyze' && event.httpMethod === 'POST') {
@@ -1134,7 +2013,10 @@ exports.handler = async function handler(event) {
       return jsonResponse(200, { data: analysis });
     } catch (error) {
       console.error('Failed to analyze meal image via Netlify function:', error);
-      return jsonResponse(500, { error: error.message || 'Failed to analyze the meal image.' });
+      return jsonResponse(500, {
+        error: error.message || 'Failed to analyze the meal image.',
+        details: formatErrorForResponse(error),
+      });
     }
   }
 
@@ -1174,7 +2056,10 @@ exports.handler = async function handler(event) {
       return jsonResponse(200, { data: suggestions });
     } catch (error) {
       console.error('Failed to provide ingredient suggestions via Netlify function:', error);
-      return jsonResponse(500, { error: error.message || 'Failed to fetch ingredient suggestions.' });
+      return jsonResponse(500, {
+        error: error.message || 'Failed to fetch ingredient suggestions.',
+        details: formatErrorForResponse(error),
+      });
     }
   }
 
@@ -1194,6 +2079,7 @@ exports.handler = async function handler(event) {
         console.error('Failed to store meal photo in Netlify Blobs:', error);
         return jsonResponse(502, {
           error: error.message || 'Unable to store the meal photo at this time.',
+          details: formatErrorForResponse(error),
         });
       }
     } catch (error) {
