@@ -183,6 +183,9 @@ async function uploadPhotoIfNeeded(photoUrl) {
 
     const payload = await response.json();
     if (payload?.url) {
+      if (payload.stored === false) {
+        console.warn('Using inline meal photo URL because blob storage is unavailable.');
+      }
       return payload.url;
     }
   } catch (error) {

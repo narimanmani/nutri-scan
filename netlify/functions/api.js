@@ -86,6 +86,21 @@ const ANALYSIS_SCHEMA = {
   }
 };
 
+const NUTRIENT_FIELDS = [
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'fiber',
+  'sugar',
+  'sodium',
+  'potassium',
+  'calcium',
+  'iron',
+  'vitamin_c',
+  'vitamin_a'
+];
+
 const CANONICAL_UNITS = ['g', 'ml', 'oz', 'cup', 'serving'];
 
 const UNIT_ALIASES = {
@@ -118,6 +133,115 @@ const UNIT_ALIASES = {
   portion: 'serving',
   portions: 'serving'
 };
+
+function canonicalizeUnit(unit) {
+  if (typeof unit !== 'string') {
+    return 'g';
+  }
+
+  const normalized = unit.trim().toLowerCase();
+  if (!normalized) {
+    return 'g';
+  }
+
+  return UNIT_ALIASES[normalized] || (CANONICAL_UNITS.includes(normalized) ? normalized : 'g');
+}
+
+function normalizeIngredient(ingredient, index = 0) {
+  const safe = ingredient && typeof ingredient === 'object' ? { ...ingredient } : {};
+  const normalized = {
+    id:
+      typeof safe.id === 'string' && safe.id.trim().length > 0
+        ? safe.id.trim()
+        : `ingredient_${index + 1}`,
+    name:
+      typeof safe.name === 'string' && safe.name.trim().length > 0
+        ? safe.name.trim()
+        : `Ingredient ${index + 1}`,
+    unit: canonicalizeUnit(safe.unit),
+    amount: Number.isFinite(Number(safe.amount)) && Number(safe.amount) >= 0 ? Number(safe.amount) : 0
+  };
+
+  for (const field of NUTRIENT_FIELDS) {
+    const numeric = Number(safe[field]);
+    normalized[field] = Number.isFinite(numeric) ? numeric : 0;
+  }
+
+  return normalized;
+}
+
+function normalizeMealPayload(raw, { id: forcedId, createdDate: forcedCreatedDate } = {}) {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const cloned = { ...raw };
+  const sanitized = { ...cloned };
+
+  const id = typeof forcedId === 'string' && forcedId
+    ? forcedId
+    : typeof sanitized.id === 'string' && sanitized.id.trim().length > 0
+      ? sanitized.id.trim()
+      : `meal_${crypto.randomUUID()}`;
+
+  sanitized.id = id;
+
+  const rawCreated =
+    typeof forcedCreatedDate === 'string' && forcedCreatedDate.trim().length > 0
+      ? forcedCreatedDate
+      : sanitized.created_date || sanitized.meal_date;
+
+  const createdDate = new Date(rawCreated || Date.now());
+  sanitized.created_date = Number.isNaN(createdDate.getTime())
+    ? new Date().toISOString()
+    : createdDate.toISOString();
+
+  sanitized.meal_date = sanitized.created_date;
+
+  sanitized.meal_name = typeof sanitized.meal_name === 'string' ? sanitized.meal_name.trim() : '';
+  sanitized.meal_type =
+    typeof sanitized.meal_type === 'string' && sanitized.meal_type.trim().length > 0
+      ? sanitized.meal_type.trim().toLowerCase()
+      : 'lunch';
+  sanitized.analysis_notes =
+    typeof sanitized.analysis_notes === 'string' ? sanitized.analysis_notes.trim() : '';
+  sanitized.notes = typeof sanitized.notes === 'string' ? sanitized.notes.trim() : '';
+  sanitized.photo_url = typeof sanitized.photo_url === 'string' ? sanitized.photo_url : '';
+
+  for (const field of NUTRIENT_FIELDS) {
+    const numeric = Number(sanitized[field]);
+    sanitized[field] = Number.isFinite(numeric) ? numeric : 0;
+  }
+
+  const ingredients = Array.isArray(sanitized.ingredients)
+    ? sanitized.ingredients.map((ingredient, index) => normalizeIngredient(ingredient, index)).filter(Boolean)
+    : [];
+
+  if (ingredients.length === 0) {
+    ingredients.push(
+      normalizeIngredient(
+        {
+          id: 'ingredient_1',
+          name: sanitized.meal_name || 'Meal serving',
+          unit: 'serving',
+          amount: 1,
+          ...NUTRIENT_FIELDS.reduce(
+            (totals, field) => ({
+              ...totals,
+              [field]: sanitized[field] || 0
+            }),
+            {}
+          )
+        },
+        0
+      )
+    );
+  }
+
+  sanitized.ingredients = ingredients;
+
+  return sanitized;
+}
 
 const SESSION_COOKIE_NAME = 'nutri_scan_session';
 let bootstrapPromise = null;
@@ -223,21 +347,6 @@ async function requireUser(event) {
 
   return { user };
 }
-
-const NUTRIENT_FIELDS = [
-  'calories',
-  'protein',
-  'carbs',
-  'fat',
-  'fiber',
-  'sugar',
-  'sodium',
-  'potassium',
-  'calcium',
-  'iron',
-  'vitamin_c',
-  'vitamin_a'
-];
 
 const DEFAULT_SUGGESTION_LIMIT = 7;
 const OPENAI_SUGGESTION_MODEL = process.env.OPENAI_SUGGESTION_MODEL || 'gpt-4o-mini';
@@ -1077,34 +1186,46 @@ function extensionFromMime(mimeType) {
 
 async function storeMealPhoto(imageDataUrl) {
   const { mimeType, buffer } = parseImageDataUrl(imageDataUrl);
+  const fallback = { url: imageDataUrl, key: null, stored: false };
 
   let store;
   try {
     store = getStore({ name: process.env.MEAL_PHOTO_STORE || 'meal-photos' });
   } catch (error) {
-    throw new Error('Unable to access Netlify Blob storage.');
+    console.warn('Netlify Blob storage is not available. Falling back to inline photo URLs.', error);
+    return fallback;
   }
 
-  if (!store) {
-    throw new Error('Netlify Blob store is not configured.');
+  if (!store || typeof store.set !== 'function') {
+    console.warn('Netlify Blob storage client is missing required methods. Using inline photo URL.');
+    return fallback;
   }
 
   const key = `meals/${Date.now()}-${Math.random().toString(36).slice(2)}.${extensionFromMime(mimeType)}`;
 
-  await store.set(key, buffer, {
-    visibility: 'public',
-    contentType: mimeType,
-    metadata: {
-      createdAt: new Date().toISOString(),
-    },
-  });
+  try {
+    await store.set(key, buffer, {
+      visibility: 'public',
+      contentType: mimeType,
+      metadata: {
+        createdAt: new Date().toISOString()
+      }
+    });
 
-  const publicUrl = store.getPublicUrl(key);
-  if (!publicUrl) {
-    throw new Error('Unable to generate a public URL for the uploaded photo.');
+    if (typeof store.getPublicUrl === 'function') {
+      const publicUrl = store.getPublicUrl(key);
+      if (publicUrl) {
+        return { url: publicUrl, key, stored: true };
+      }
+    }
+
+    console.warn('Meal photo stored but no public URL was returned. Using inline URL.');
+  } catch (error) {
+    console.warn('Failed to persist meal photo in Netlify Blob storage. Using inline photo URL instead.', error);
+    return fallback;
   }
 
-  return { url: publicUrl, key };
+  return fallback;
 }
 
 async function analyzeWithOpenAI({ imageDataUrl }) {
@@ -1213,10 +1334,15 @@ function jsonResponse(statusCode, body, event = null, extraHeaders = {}) {
     headers['Access-Control-Allow-Credentials'] = 'true';
   }
 
+  const shouldOmitBody = [204, 205, 304].includes(statusCode);
+  if (shouldOmitBody) {
+    return { statusCode, headers };
+  }
+
   return {
     statusCode,
     headers,
-    body: JSON.stringify(body)
+    body: JSON.stringify(body ?? {})
   };
 }
 
@@ -1401,21 +1527,29 @@ async function handleRequest(event) {
       }
 
       const mealId = `meal_${crypto.randomUUID()}`;
-      const createdDate = payload.created_date || payload.meal_date || new Date().toISOString();
-      const sanitized = {
-        ...payload,
+      const normalized = normalizeMealPayload(payload, {
         id: mealId,
-        created_date: createdDate
-      };
-      const createdAt = new Date(createdDate);
+        createdDate: payload.created_date || payload.meal_date
+      });
+
+      if (!normalized) {
+        return jsonResponse(400, { error: 'Meal payload is required.' }, event);
+      }
+
+      const createdAt = new Date(normalized.created_date);
       const createdTimestamp = Number.isNaN(createdAt.getTime()) ? new Date() : createdAt;
 
-      await query(
-        'INSERT INTO meals (id, user_id, payload, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)',
-        [mealId, user.id, sanitized, createdTimestamp, new Date()]
-      );
+      try {
+        await query(
+          'INSERT INTO meals (id, user_id, payload, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)',
+          [mealId, user.id, normalized, createdTimestamp, new Date()]
+        );
+      } catch (error) {
+        console.error('Failed to persist meal for user', user.id, error);
+        return jsonResponse(500, { error: 'Unable to save the meal right now. Please try again.' }, event);
+      }
 
-      return jsonResponse(201, { data: sanitized }, event);
+      return jsonResponse(201, { data: normalized }, event);
     }
 
     if (segments.length === 2) {
@@ -1451,19 +1585,25 @@ async function handleRequest(event) {
         }
 
         const existing = rows[0].payload;
-        const next = {
-          ...existing,
-          ...updates,
-          id: existing.id,
-          created_date: updates?.created_date || existing.created_date
-        };
-
-        await query(
-          'UPDATE meals SET payload = $1, updated_at = $2 WHERE id = $3 AND user_id = $4',
-          [next, new Date(), mealId, user.id]
+        const normalized = normalizeMealPayload(
+          { ...existing, ...updates },
+          {
+            id: existing.id,
+            createdDate: updates?.created_date || existing.created_date
+          }
         );
 
-        return jsonResponse(200, { data: next }, event);
+        try {
+          await query(
+            'UPDATE meals SET payload = $1, updated_at = $2 WHERE id = $3 AND user_id = $4',
+            [normalized, new Date(), mealId, user.id]
+          );
+        } catch (error) {
+          console.error('Failed to update meal for user', user.id, 'and meal', mealId, error);
+          return jsonResponse(500, { error: 'Unable to update the meal right now. Please try again.' }, event);
+        }
+
+        return jsonResponse(200, { data: normalized }, event);
       }
 
       if (event.httpMethod === 'DELETE') {
