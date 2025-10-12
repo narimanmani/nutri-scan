@@ -1172,6 +1172,9 @@ function buildTemplateFromQuery(text, values) {
   const template = segments.slice();
   template.raw = segments.slice();
 
+  Object.freeze(template.raw);
+  Object.freeze(template);
+
   return template;
 }
 
@@ -1459,7 +1462,8 @@ async function initializeDatabase(sql = getSqlClient()) {
   await ensureTables(sql);
 
   const mealCountResult = await sql`SELECT COUNT(*)::int AS count FROM meals`;
-  const mealCount = Number(mealCountResult?.[0]?.count || 0);
+  const mealCountRows = extractRows(mealCountResult);
+  const mealCount = Number(mealCountRows?.[0]?.count || 0);
 
   if (mealCount === 0 && Array.isArray(mealsSeed)) {
     for (let index = 0; index < mealsSeed.length; index += 1) {
@@ -1477,7 +1481,8 @@ async function initializeDatabase(sql = getSqlClient()) {
   }
 
   const planCountResult = await sql`SELECT COUNT(*)::int AS count FROM diet_plans`;
-  const planCount = Number(planCountResult?.[0]?.count || 0);
+  const planCountRows = extractRows(planCountResult);
+  const planCount = Number(planCountRows?.[0]?.count || 0);
 
   if (planCount === 0 && Array.isArray(dietPlansSeed)) {
     const seededPlans = dietPlansSeed.map((plan, index) =>
@@ -1705,37 +1710,38 @@ async function handleMeals(event, subPath) {
       const limitValue = Number(event.queryStringParameters?.limit);
       const hasLimit = Number.isFinite(limitValue) && limitValue > 0;
 
-      let rows;
+      let queryResult;
       if (direction === 'ASC') {
         if (hasLimit) {
-          rows = await sql`
+          queryResult = await sql`
             SELECT id, created_date, data
             FROM meals
             ORDER BY created_date ASC
             LIMIT ${limitValue}
           `;
         } else {
-          rows = await sql`
+          queryResult = await sql`
             SELECT id, created_date, data
             FROM meals
             ORDER BY created_date ASC
           `;
         }
       } else if (hasLimit) {
-        rows = await sql`
+        queryResult = await sql`
           SELECT id, created_date, data
           FROM meals
           ORDER BY created_date DESC
           LIMIT ${limitValue}
         `;
       } else {
-        rows = await sql`
+        queryResult = await sql`
           SELECT id, created_date, data
           FROM meals
           ORDER BY created_date DESC
         `;
       }
 
+      const rows = extractRows(queryResult);
       return jsonResponse(200, {
         data: rows.map((row, index) => deserializeMealRow(row, index))
       });
@@ -1765,12 +1771,14 @@ async function handleMeals(event, subPath) {
       const mealId = decodeURIComponent(mealMatch[1]);
 
       if (event.httpMethod === 'GET') {
-        const rows = await sql`
+        const rowsResult = await sql`
           SELECT id, created_date, data
           FROM meals
           WHERE id = ${mealId}
           LIMIT 1
         `;
+
+        const rows = extractRows(rowsResult);
 
         if (!rows || rows.length === 0) {
           return jsonResponse(404, { error: 'Meal not found.' });
@@ -1792,12 +1800,14 @@ async function handleMeals(event, subPath) {
           return jsonResponse(400, { error: 'meal payload is required.' });
         }
 
-        const existingRows = await sql`
+        const existingRowsResult = await sql`
           SELECT id, created_date, data
           FROM meals
           WHERE id = ${mealId}
           LIMIT 1
         `;
+
+        const existingRows = extractRows(existingRowsResult);
 
         if (!existingRows || existingRows.length === 0) {
           return jsonResponse(404, { error: 'Meal not found.' });
@@ -1825,7 +1835,9 @@ async function handleMeals(event, subPath) {
           RETURNING id
         `;
 
-        if (!deleteResult || deleteResult.length === 0) {
+        const deletedRows = extractRows(deleteResult);
+
+        if (!deletedRows || deletedRows.length === 0) {
           return jsonResponse(404, { error: 'Meal not found.' });
         }
 
@@ -1868,12 +1880,13 @@ async function handleDietPlans(event, subPath) {
 
   try {
     if (event.httpMethod === 'GET' && (subPath === '/diet-plans' || subPath === '/diet-plans/')) {
-      const rows = await sql`
+      const rowsResult = await sql`
         SELECT id, is_active, created_at, updated_at, data
         FROM diet_plans
         ORDER BY is_active DESC, created_at DESC
       `;
 
+      const rows = extractRows(rowsResult);
       const rawPlans = rows.map((row, index) => deserializeDietPlanRow(row, index));
       const queryParams = event.queryStringParameters || {};
       const sourceFilter =
@@ -1937,12 +1950,14 @@ async function handleDietPlans(event, subPath) {
     if (activateMatch) {
       const planId = decodeURIComponent(activateMatch[1]);
 
-      const rows = await sql`
+      const rowsResult = await sql`
         SELECT id, is_active, created_at, updated_at, data
         FROM diet_plans
         WHERE id = ${planId}
         LIMIT 1
       `;
+
+      const rows = extractRows(rowsResult);
 
       if (!rows || rows.length === 0) {
         return jsonResponse(404, { error: 'Diet plan not found.' });
@@ -1965,12 +1980,14 @@ async function handleDietPlans(event, subPath) {
       const planId = decodeURIComponent(planMatch[1]);
 
       if (event.httpMethod === 'GET') {
-        const rows = await sql`
+        const rowsResult = await sql`
           SELECT id, is_active, created_at, updated_at, data
           FROM diet_plans
           WHERE id = ${planId}
           LIMIT 1
         `;
+
+        const rows = extractRows(rowsResult);
 
         if (!rows || rows.length === 0) {
           return jsonResponse(404, { error: 'Diet plan not found.' });
@@ -1992,12 +2009,14 @@ async function handleDietPlans(event, subPath) {
           return jsonResponse(400, { error: 'plan payload is required.' });
         }
 
-        const rows = await sql`
+        const rowsResult = await sql`
           SELECT id, is_active, created_at, updated_at, data
           FROM diet_plans
           WHERE id = ${planId}
           LIMIT 1
         `;
+
+        const rows = extractRows(rowsResult);
 
         if (!rows || rows.length === 0) {
           return jsonResponse(404, { error: 'Diet plan not found.' });
@@ -2027,7 +2046,9 @@ async function handleDietPlans(event, subPath) {
           RETURNING id
         `;
 
-        if (!deleteResult || deleteResult.length === 0) {
+        const deletedRows = extractRows(deleteResult);
+
+        if (!deletedRows || deletedRows.length === 0) {
           return jsonResponse(404, { error: 'Diet plan not found.' });
         }
 
