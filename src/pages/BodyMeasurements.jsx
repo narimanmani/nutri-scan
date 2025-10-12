@@ -3,11 +3,10 @@ import { Link } from "react-router-dom";
 import { getSilhouetteAsset } from "@/utils/wgerAssets.js";
 import {
   DEFAULT_MEASUREMENT_FIELDS,
-  getDefaultMeasurementPositions,
-  loadMeasurementPositions,
+  createDefaultMeasurementPositions,
   mergeFieldsWithPositions,
 } from "@/utils/bodyMeasurementLayout.js";
-import { saveMeasurementEntry } from "@/utils/measurementHistory.js";
+import { fetchMeasurementLayout, saveMeasurementEntry } from "@/api/measurements";
 import { createPageUrl } from "@/utils";
 
 function createInitialValues(fields) {
@@ -49,20 +48,35 @@ export default function BodyMeasurements() {
   const [profile, setProfile] = useState({ gender: "", age: "", height: "", weight: "" });
   const [status, setStatus] = useState(null);
   const [positions, setPositions] = useState(null);
+  const [isLoadingPositions, setIsLoadingPositions] = useState(true);
 
   const baseImage = useMemo(() => getSilhouetteAsset("front"), []);
 
   useEffect(() => {
-    const storedPositions = loadMeasurementPositions();
-    if (storedPositions) {
-      setPositions(storedPositions);
-      return;
-    }
+    let isMounted = true;
 
-    const defaults = getDefaultMeasurementPositions();
-    if (defaults) {
-      setPositions(defaults);
-    }
+    (async () => {
+      setIsLoadingPositions(true);
+      try {
+        const layout = await fetchMeasurementLayout();
+        if (isMounted && layout) {
+          setPositions(layout);
+        }
+      } catch (error) {
+        console.error("Failed to load measurement layout", error);
+        if (isMounted) {
+          setPositions(createDefaultMeasurementPositions());
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingPositions(false);
+        }
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const measurementFields = useMemo(
@@ -158,16 +172,26 @@ export default function BodyMeasurements() {
       weightUnit: "kg",
     };
 
-    saveMeasurementEntry(entry);
-    setStatus({
-      type: "success",
-      message: `Measurements saved! Height ${formatNumber(convertedHeight)} cm, weight ${formatNumber(
-        convertedWeight
-      )} kg. View analytics in the Measurement Intelligence section.`,
-    });
+    (async () => {
+      try {
+        await saveMeasurementEntry(entry);
+        setStatus({
+          type: "success",
+          message: `Measurements saved! Height ${formatNumber(convertedHeight)} cm, weight ${formatNumber(
+            convertedWeight
+          )} kg. View analytics in the Measurement Intelligence section.`,
+        });
 
-    setValues(createInitialValues(DEFAULT_MEASUREMENT_FIELDS));
-    setProfile({ gender: "", age: "", height: "", weight: "" });
+        setValues(createInitialValues(DEFAULT_MEASUREMENT_FIELDS));
+        setProfile({ gender: "", age: "", height: "", weight: "" });
+      } catch (error) {
+        console.error("Failed to save measurement entry", error);
+        setStatus({
+          type: "error",
+          message: "We couldn't save your measurements. Please try again.",
+        });
+      }
+    })();
   };
 
   return (
@@ -193,7 +217,11 @@ export default function BodyMeasurements() {
           </div>
 
           <div className="relative mx-auto aspect-[3/5] w-full max-w-sm overflow-hidden rounded-[2.25rem] border border-emerald-100 bg-gradient-to-b from-emerald-50 via-white to-emerald-100 shadow-inner lg:mx-0 lg:max-w-none">
-            {baseImage ? (
+            {isLoadingPositions ? (
+              <div className="flex h-full w-full items-center justify-center text-emerald-700">
+                Loading guide...
+              </div>
+            ) : baseImage ? (
               <img
                 src={baseImage}
                 alt="Front anatomy silhouette"
