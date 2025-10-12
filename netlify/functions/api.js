@@ -1103,6 +1103,57 @@ const getSqlClient = (() => {
       sql.json = (value) => JSON.stringify(value ?? null);
     }
 
+    if (typeof sql.query !== 'function') {
+      sql.query = (query, params = []) => {
+        let text = query;
+        let values = Array.isArray(params) ? params : [];
+
+        if (query && typeof query === 'object') {
+          if (Array.isArray(query.values)) {
+            values = query.values;
+          } else if (Array.isArray(query.args)) {
+            values = query.args;
+          }
+
+          if (typeof query.text === 'string') {
+            text = query.text;
+          }
+        }
+
+        if (Array.isArray(text) && Array.isArray(text.raw)) {
+          return sql(text, ...values);
+        }
+
+        if (typeof text !== 'string') {
+          throw new Error('sql.query fallback requires a query string.');
+        }
+
+        const segments = [];
+        const bindings = [];
+        let cursor = 0;
+
+        for (let index = 0; index < values.length; index += 1) {
+          const placeholder = `$${index + 1}`;
+          const position = text.indexOf(placeholder, cursor);
+
+          if (position === -1) {
+            throw new Error(`Missing placeholder ${placeholder} in query: ${text}`);
+          }
+
+          segments.push(text.slice(cursor, position));
+          bindings.push(values[index]);
+          cursor = position + placeholder.length;
+        }
+
+        segments.push(text.slice(cursor));
+
+        const template = segments.slice();
+        template.raw = segments.slice();
+
+        return sql(template, ...bindings);
+      };
+    }
+
     return sql;
   }
 
