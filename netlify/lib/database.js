@@ -61,13 +61,10 @@ async function query(text, params = []) {
 }
 
 async function ensureSchema() {
-  await query('CREATE EXTENSION IF NOT EXISTS "pgcrypto";');
-  await query('CREATE EXTENSION IF NOT EXISTS citext;');
-
   await query(`
     CREATE TABLE IF NOT EXISTS users (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      username citext UNIQUE NOT NULL,
+      id uuid PRIMARY KEY,
+      username text NOT NULL,
       password_hash text NOT NULL,
       role text NOT NULL CHECK (role IN ('user', 'admin')),
       created_at timestamptz NOT NULL DEFAULT now()
@@ -75,8 +72,13 @@ async function ensureSchema() {
   `);
 
   await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx
+    ON users ((lower(username)));
+  `);
+
+  await query(`
     CREATE TABLE IF NOT EXISTS sessions (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      id uuid PRIMARY KEY,
       user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       token_hash text NOT NULL UNIQUE,
       created_at timestamptz NOT NULL DEFAULT now(),
@@ -115,7 +117,7 @@ async function ensureSchema() {
 
   await query(`
     CREATE TABLE IF NOT EXISTS measurement_history (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      id uuid PRIMARY KEY,
       user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       entry jsonb NOT NULL,
       recorded_at timestamptz NOT NULL DEFAULT now()
@@ -125,7 +127,9 @@ async function ensureSchema() {
 
 async function getUserByUsername(username) {
   if (!username) return null;
-  const { rows } = await query('SELECT * FROM users WHERE username = $1', [username]);
+  const normalized = String(username).trim().toLowerCase();
+  if (!normalized) return null;
+  const { rows } = await query('SELECT * FROM users WHERE lower(username) = $1', [normalized]);
   return rows[0] || null;
 }
 
@@ -152,14 +156,19 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+function generateId() {
+  return crypto.randomUUID();
+}
+
 async function createSession(userId, ttlHours = 24 * 7) {
+  const id = generateId();
   const token = generateSessionToken();
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
 
   await query(
-    'INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
-    [userId, tokenHash, expiresAt]
+    'INSERT INTO sessions (id, user_id, token_hash, expires_at) VALUES ($1, $2, $3, $4)',
+    [id, userId, tokenHash, expiresAt]
   );
 
   return { token, expiresAt };
@@ -182,15 +191,16 @@ async function deleteSession(token) {
 }
 
 async function ensureUser({ username, password, role }, bcrypt) {
-  const existing = await getUserByUsername(username);
+  const normalizedUsername = String(username).trim().toLowerCase();
+  const existing = await getUserByUsername(normalizedUsername);
   if (existing) {
     return existing;
   }
 
   const passwordHash = await hashPassword(password, bcrypt);
   const { rows } = await query(
-    'INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3) RETURNING *',
-    [username, passwordHash, role]
+    'INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING *',
+    [generateId(), normalizedUsername, passwordHash, role]
   );
   return rows[0];
 }

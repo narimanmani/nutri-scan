@@ -1268,7 +1268,7 @@ exports.handler = async function handler(event) {
       return jsonResponse(400, { error: 'Invalid request payload.' }, event);
     }
 
-    const username = String(payload.username || '').trim();
+    const username = String(payload.username || '').trim().toLowerCase();
     const password = String(payload.password || '');
 
     if (username.length < 3) {
@@ -1285,9 +1285,10 @@ exports.handler = async function handler(event) {
     }
 
     const passwordHash = await hashPassword(password, bcrypt);
+    const userId = crypto.randomUUID();
     const { rows } = await query(
-      'INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3) RETURNING id, username, role',
-      [username, passwordHash, 'user']
+      'INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, username, role',
+      [userId, username, passwordHash, 'user']
     );
 
     const user = rows[0];
@@ -1308,7 +1309,7 @@ exports.handler = async function handler(event) {
       return jsonResponse(400, { error: 'Invalid request payload.' }, event);
     }
 
-    const username = String(payload.username || '').trim();
+    const username = String(payload.username || '').trim().toLowerCase();
     const password = String(payload.password || '');
 
     if (!username || !password) {
@@ -1717,8 +1718,8 @@ exports.handler = async function handler(event) {
       const timestamp = Number.isNaN(recordedDate.getTime()) ? new Date() : recordedDate;
 
       await query(
-        'INSERT INTO measurement_history (user_id, entry, recorded_at) VALUES ($1, $2, $3)',
-        [user.id, entry, timestamp]
+        'INSERT INTO measurement_history (id, user_id, entry, recorded_at) VALUES ($1, $2, $3, $4)',
+        [crypto.randomUUID(), user.id, entry, timestamp]
       );
 
       return jsonResponse(201, { data: entry }, event);
