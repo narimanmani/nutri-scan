@@ -1234,7 +1234,7 @@ function resolveSubPath(event) {
   return normalized.startsWith('/') ? normalized : `/${normalized}`;
 }
 
-exports.handler = async function handler(event) {
+async function handleRequest(event) {
   const subPath = resolveSubPath(event);
 
   const origin = event.headers?.origin || event.headers?.Origin || '*';
@@ -1808,4 +1808,13 @@ exports.handler = async function handler(event) {
   }
 
   return jsonResponse(404, { error: 'Not found.' });
+}
+
+exports.handler = async function handler(event) {
+  try {
+    return await handleRequest(event);
+  } catch (error) {
+    console.error('Unhandled API error:', error);
+    return jsonResponse(500, { error: 'Internal server error.' }, event);
+  }
 };

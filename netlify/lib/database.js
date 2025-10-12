@@ -5,6 +5,7 @@ const path = require('path');
 
 let mealsSeed = [];
 let dietPlansSeed = [];
+let measurementHistorySeed = [];
 
 function loadSeed(relativePath, label) {
   try {
@@ -24,6 +25,7 @@ function loadSeed(relativePath, label) {
 
 mealsSeed = loadSeed('../../src/data/meals.json', 'Meal');
 dietPlansSeed = loadSeed('../../src/data/dietPlans.json', 'Diet plan');
+measurementHistorySeed = loadSeed('../../src/data/measurementHistory.json', 'Measurement history');
 
 const DEFAULT_MEASUREMENT_POSITIONS = {
   chest: { point: { x: 50, y: 30 }, anchor: { x: 82, y: 30 } },
@@ -75,6 +77,37 @@ async function query(text, params = []) {
   }
 }
 
+async function columnExists(tableName, columnName) {
+  const { rows } = await query(
+    `
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = $1
+        AND column_name = $2
+      LIMIT 1;
+    `,
+    [tableName, columnName]
+  );
+
+  return rows.length > 0;
+}
+
+async function ensureForeignKey(tableName, constraintName, definition) {
+  await query(
+    `
+      DO $$
+      BEGIN
+        ALTER TABLE ${tableName}
+          ADD CONSTRAINT ${constraintName} ${definition};
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END;
+      $$;
+    `
+  );
+}
+
 async function ensureSchema() {
   await query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -104,11 +137,26 @@ async function ensureSchema() {
   await query(`
     CREATE TABLE IF NOT EXISTS meals (
       id text PRIMARY KEY,
-      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id uuid REFERENCES users(id) ON DELETE CASCADE,
       payload jsonb NOT NULL,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+  `);
+
+  await query(`
+    ALTER TABLE meals
+    ADD COLUMN IF NOT EXISTS user_id uuid;
+  `);
+
+  await query(`
+    ALTER TABLE meals
+    ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
+  `);
+
+  await query(`
+    ALTER TABLE meals
+    ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
   `);
 
   await query(`
@@ -121,18 +169,48 @@ async function ensureSchema() {
   `);
 
   await query(`
+    UPDATE meals SET created_at = now() WHERE created_at IS NULL;
+  `);
+
+  await query(`
+    UPDATE meals SET updated_at = created_at WHERE updated_at IS NULL;
+  `);
+
+  await query(`
     ALTER TABLE meals ALTER COLUMN payload SET NOT NULL;
   `);
+
+  await ensureForeignKey('meals', 'meals_user_id_fkey', 'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE');
 
   await query(`
     CREATE TABLE IF NOT EXISTS diet_plans (
       id text PRIMARY KEY,
-      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id uuid REFERENCES users(id) ON DELETE CASCADE,
       payload jsonb NOT NULL,
       is_active boolean NOT NULL DEFAULT false,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+  `);
+
+  await query(`
+    ALTER TABLE diet_plans
+    ADD COLUMN IF NOT EXISTS user_id uuid;
+  `);
+
+  await query(`
+    ALTER TABLE diet_plans
+    ADD COLUMN IF NOT EXISTS is_active boolean DEFAULT false;
+  `);
+
+  await query(`
+    ALTER TABLE diet_plans
+    ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
+  `);
+
+  await query(`
+    ALTER TABLE diet_plans
+    ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
   `);
 
   await query(`
@@ -145,8 +223,26 @@ async function ensureSchema() {
   `);
 
   await query(`
+    UPDATE diet_plans SET is_active = false WHERE is_active IS NULL;
+  `);
+
+  await query(`
+    UPDATE diet_plans SET created_at = now() WHERE created_at IS NULL;
+  `);
+
+  await query(`
+    UPDATE diet_plans SET updated_at = created_at WHERE updated_at IS NULL;
+  `);
+
+  await query(`
     ALTER TABLE diet_plans ALTER COLUMN payload SET NOT NULL;
   `);
+
+  await ensureForeignKey(
+    'diet_plans',
+    'diet_plans_user_id_fkey',
+    'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE'
+  );
 
   await query(`
     CREATE TABLE IF NOT EXISTS measurement_layouts (
@@ -157,13 +253,63 @@ async function ensureSchema() {
   `);
 
   await query(`
+    ALTER TABLE measurement_layouts
+    ADD COLUMN IF NOT EXISTS positions jsonb DEFAULT '{}'::jsonb;
+  `);
+
+  await query(`
+    UPDATE measurement_layouts SET positions = '{}'::jsonb WHERE positions IS NULL;
+  `);
+
+  await query(`
     CREATE TABLE IF NOT EXISTS measurement_history (
       id uuid PRIMARY KEY,
-      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id uuid REFERENCES users(id) ON DELETE CASCADE,
       entry jsonb NOT NULL,
       recorded_at timestamptz NOT NULL DEFAULT now()
     );
   `);
+
+  await query(`
+    ALTER TABLE measurement_history
+    ADD COLUMN IF NOT EXISTS user_id uuid;
+  `);
+
+  await query(`
+    ALTER TABLE measurement_history
+    ADD COLUMN IF NOT EXISTS recorded_at timestamptz DEFAULT now();
+  `);
+
+  await query(`
+    ALTER TABLE measurement_history
+    ADD COLUMN IF NOT EXISTS entry jsonb DEFAULT '{}'::jsonb;
+  `);
+
+  const hasLegacyPayloadColumn = await columnExists('measurement_history', 'payload');
+  if (hasLegacyPayloadColumn) {
+    await query(`
+      UPDATE measurement_history SET entry = payload
+      WHERE entry IS NULL AND payload IS NOT NULL;
+    `);
+  }
+
+  await query(`
+    UPDATE measurement_history SET entry = '{}'::jsonb WHERE entry IS NULL;
+  `);
+
+  await query(`
+    UPDATE measurement_history SET recorded_at = now() WHERE recorded_at IS NULL;
+  `);
+
+  await query(`
+    ALTER TABLE measurement_history ALTER COLUMN entry SET NOT NULL;
+  `);
+
+  await ensureForeignKey(
+    'measurement_history',
+    'measurement_history_user_id_fkey',
+    'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE'
+  );
 }
 
 async function getUserByUsername(username) {
@@ -300,6 +446,56 @@ async function ensureMealSeed(userId) {
   }
 }
 
+function normalizeMeasurementEntry(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const entry = JSON.parse(JSON.stringify(raw));
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (typeof entry.id === 'string' && !uuidRegex.test(entry.id)) {
+    entry.legacyId = entry.id;
+    entry.id = crypto.randomUUID();
+  }
+
+  if (typeof entry.id !== 'string' || !uuidRegex.test(entry.id)) {
+    entry.id = crypto.randomUUID();
+  }
+
+  entry.recordedAt = entry.recordedAt || new Date().toISOString();
+  return entry;
+}
+
+async function ensureMeasurementHistorySeed(userId) {
+  if (!Array.isArray(measurementHistorySeed) || measurementHistorySeed.length === 0) {
+    return;
+  }
+
+  for (const rawEntry of measurementHistorySeed) {
+    const entry = normalizeMeasurementEntry(rawEntry);
+    if (!entry) {
+      continue;
+    }
+
+    const { rows } = await query('SELECT id FROM measurement_history WHERE id = $1 AND user_id = $2', [
+      entry.id,
+      userId
+    ]);
+
+    if (rows.length > 0) {
+      continue;
+    }
+
+    const recorded = new Date(entry.recordedAt);
+    const timestamp = Number.isNaN(recorded.getTime()) ? new Date() : recorded;
+
+    await query(
+      'INSERT INTO measurement_history (id, user_id, entry, recorded_at) VALUES ($1, $2, $3, $4)',
+      [entry.id, userId, entry, timestamp]
+    );
+  }
+}
+
 async function ensureMeasurementDefaults(userId) {
   const { rows } = await query('SELECT user_id FROM measurement_layouts WHERE user_id = $1', [userId]);
   if (rows.length > 0) {
@@ -324,8 +520,14 @@ async function seedInitialData(bcrypt) {
 
   await ensureMealSeed(sampleUser.id);
   await ensureDietPlanSeed(sampleUser.id);
+  await ensureMeasurementHistorySeed(sampleUser.id);
   await ensureMeasurementDefaults(sampleUser.id);
   await ensureMeasurementDefaults(adminUser.id);
+
+  await query('UPDATE meals SET user_id = $1 WHERE user_id IS NULL', [sampleUser.id]);
+  await query('UPDATE diet_plans SET user_id = $1 WHERE user_id IS NULL', [sampleUser.id]);
+  await query('UPDATE measurement_layouts SET user_id = $1 WHERE user_id IS NULL', [sampleUser.id]);
+  await query('UPDATE measurement_history SET user_id = $1 WHERE user_id IS NULL', [sampleUser.id]);
 }
 
 module.exports = {
