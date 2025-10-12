@@ -1,9 +1,11 @@
 
-import { useEffect } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useEffect, useMemo } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { Camera, BarChart3, History, Leaf, ClipboardList, Dumbbell, Ruler, Settings2, Brain } from "lucide-react";
+import { Camera, BarChart3, History, Leaf, ClipboardList, Dumbbell, Ruler, Settings2, Brain, LogOut } from "lucide-react";
 import { APP_DESCRIPTION, APP_NAME, APP_TAGLINE } from "@/constants/app";
+import useAuth from "@/hooks/useAuth";
+import { Button } from "@/components/ui/button";
 import {
   Sidebar,
   SidebarContent,
@@ -18,51 +20,65 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 
-const navigationItems = [
-  {
-    title: "Dashboard",
-    url: createPageUrl("Dashboard"),
-    icon: BarChart3,
-  },
-  {
-    title: "Upload Meal",
-    url: createPageUrl("Upload"),
-    icon: Camera,
-  },
-  {
-    title: "Meal History",
-    url: createPageUrl("History"),
-    icon: History,
-  },
-  {
-    title: "Diet Plans",
-    url: createPageUrl("Diet Plans"),
-    icon: ClipboardList,
-  },
-  {
-    title: "Workout Planner",
-    url: createPageUrl("Workout Planner"),
-    icon: Dumbbell,
-  },
-  {
-    title: "Body Measurements",
-    url: createPageUrl("Body Measurements"),
-    icon: Ruler,
-  },
-  {
-    title: "Measurement Intelligence",
-    url: createPageUrl("Measurement Intelligence"),
-    icon: Brain,
-  },
-  {
-    title: "Body Measurements Admin",
-    url: createPageUrl("Body Measurements Admin"),
-    icon: Settings2,
-  },
-];
-
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
+
+  const navigationItems = useMemo(() => {
+    const items = [
+      {
+        title: "Dashboard",
+        url: createPageUrl("Dashboard"),
+        icon: BarChart3,
+      },
+      {
+        title: "Upload Meal",
+        url: createPageUrl("Upload"),
+        icon: Camera,
+      },
+      {
+        title: "Meal History",
+        url: createPageUrl("History"),
+        icon: History,
+      },
+      {
+        title: "Diet Plans",
+        url: createPageUrl("Diet Plans"),
+        icon: ClipboardList,
+      },
+      {
+        title: "Workout Planner",
+        url: createPageUrl("Workout Planner"),
+        icon: Dumbbell,
+      },
+      {
+        title: "Body Measurements",
+        url: createPageUrl("Body Measurements"),
+        icon: Ruler,
+      },
+      {
+        title: "Measurement Intelligence",
+        url: createPageUrl("Measurement Intelligence"),
+        icon: Brain,
+      },
+    ];
+
+    if (user?.role === 'admin') {
+      items.push({
+        title: "Body Measurements Admin",
+        url: createPageUrl("Body Measurements Admin"),
+        icon: Settings2,
+      });
+    }
+
+    return items;
+  }, [user]);
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login', { replace: true });
+  };
 
   useEffect(() => {
     const pageTitle = currentPageName ? `${APP_NAME} | ${currentPageName}` : APP_NAME;
@@ -132,11 +148,24 @@ export default function Layout({ children, currentPageName }) {
             </SidebarGroup>
           </SidebarContent>
 
-          <SidebarFooter className="border-t border-gray-100 p-6">
+          <SidebarFooter className="border-t border-gray-100 p-6 space-y-4">
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-500">Signed in as</p>
+              <p className="mt-1 text-sm font-semibold text-emerald-900">{user?.username}</p>
+              <p className="text-xs capitalize text-emerald-700/80">{user?.role}</p>
+            </div>
             <div className="bg-gradient-to-r from-emerald-50 to-teal-50 p-4 rounded-xl border border-emerald-100">
               <h3 className="font-semibold text-emerald-800 text-sm mb-1">Stay Healthy!</h3>
               <p className="text-emerald-600 text-xs leading-relaxed">{APP_DESCRIPTION}</p>
             </div>
+            <Button
+              variant="outline"
+              onClick={handleLogout}
+              className="w-full justify-center gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-100"
+            >
+              <LogOut className="h-4 w-4" />
+              Sign out
+            </Button>
           </SidebarFooter>
         </Sidebar>
 

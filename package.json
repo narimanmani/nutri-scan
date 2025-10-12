@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@netlify/blobs": "^6.5.0",
+    "bcryptjs": "^2.4.3",
     "@hookform/resolvers": "^4.1.2",
     "@radix-ui/react-accordion": "^1.2.3",
     "@radix-ui/react-alert-dialog": "^1.1.6",
@@ -58,6 +59,7 @@
     "tailwind-merge": "^3.0.2",
     "tailwindcss-animate": "^1.0.7",
     "vaul": "^1.1.2",
+    "pg": "^8.13.1",
     "zod": "^3.24.2"
   },
   "devDependencies": {
