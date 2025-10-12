@@ -7,6 +7,7 @@ import {
   loadDefaultMeasurementOverride,
   loadMeasurementPositions,
   mergeFieldsWithPositions,
+  normalizeMeasurementPositions,
   saveDefaultMeasurementPositions,
   saveMeasurementPositions,
 } from "@/utils/bodyMeasurementLayout.js";
@@ -16,17 +17,22 @@ function clamp(value, min, max) {
 }
 
 export default function BodyMeasurementsAdmin() {
-  const [positions, setPositions] = useState(() => {
+  const initialPositions = useMemo(() => {
     const stored = loadMeasurementPositions();
     return stored || getDefaultMeasurementPositions();
-  });
+  }, []);
+
+  const [positions, setPositions] = useState(initialPositions);
   const [selectedFieldId, setSelectedFieldId] = useState(DEFAULT_MEASUREMENT_FIELDS[0].id);
   const [isDirty, setIsDirty] = useState(false);
-  const [statusMessage, setStatusMessage] = useState("");
+  const [status, setStatus] = useState(null);
   const [dragState, setDragState] = useState(null);
   const svgRef = useRef(null);
   const baseImage = useMemo(() => getSilhouetteAsset("front"), []);
   const [hasCustomDefault, setHasCustomDefault] = useState(() => Boolean(loadDefaultMeasurementOverride()));
+  const [layoutJson, setLayoutJson] = useState(() =>
+    JSON.stringify(normalizeMeasurementPositions(initialPositions), null, 2)
+  );
 
   const measurementFields = useMemo(
     () => mergeFieldsWithPositions(DEFAULT_MEASUREMENT_FIELDS, positions),
@@ -68,7 +74,7 @@ export default function BodyMeasurementsAdmin() {
         };
       });
       setIsDirty(true);
-      setStatusMessage("");
+      setStatus(null);
     };
 
     const handlePointerUp = () => {
@@ -114,7 +120,7 @@ export default function BodyMeasurementsAdmin() {
       };
     });
     setIsDirty(true);
-    setStatusMessage("");
+    setStatus(null);
   };
 
   const handleDragStart = (fieldId, target) => (event) => {
@@ -122,10 +128,20 @@ export default function BodyMeasurementsAdmin() {
     setDragState({ fieldId, target });
   };
 
+  const formatPositions = (nextPositions) =>
+    JSON.stringify(normalizeMeasurementPositions(nextPositions), null, 2);
+
+  useEffect(() => {
+    if (!isDirty) {
+      setLayoutJson(formatPositions(positions));
+    }
+  }, [isDirty, positions]);
+
   const handleSave = () => {
     saveMeasurementPositions(positions);
     setIsDirty(false);
-    setStatusMessage("Measurement guides saved successfully.");
+    setStatus({ tone: "success", message: "Measurement guides saved successfully." });
+    setLayoutJson(formatPositions(positions));
   };
 
   const handleReset = () => {
@@ -133,9 +149,12 @@ export default function BodyMeasurementsAdmin() {
     clearMeasurementPositions();
     setPositions(defaults);
     setIsDirty(false);
-    setStatusMessage(
-      hasCustomDefault ? "Guides reset to your saved default layout." : "Guides reset to default positions."
-    );
+    setStatus({
+      tone: "success",
+      message: hasCustomDefault
+        ? "Guides reset to your saved default layout."
+        : "Guides reset to default positions.",
+    });
   };
 
   const handleSaveAsDefault = () => {
@@ -143,7 +162,25 @@ export default function BodyMeasurementsAdmin() {
     saveMeasurementPositions(positions);
     setHasCustomDefault(true);
     setIsDirty(false);
-    setStatusMessage("Current layout saved as the new default for this device.");
+    setStatus({ tone: "success", message: "Current layout saved as the new default for this device." });
+    setLayoutJson(formatPositions(positions));
+  };
+
+  const handleImportLayout = () => {
+    try {
+      const parsed = JSON.parse(layoutJson);
+      const normalized = normalizeMeasurementPositions(parsed);
+      setPositions(normalized);
+      setIsDirty(true);
+      setStatus({ tone: "success", message: "Layout imported. Save to apply the changes." });
+      setLayoutJson(formatPositions(normalized));
+    } catch (error) {
+      console.warn("Failed to import measurement layout from JSON", error);
+      setStatus({
+        tone: "error",
+        message: "Unable to import layout. Please ensure the JSON structure is valid.",
+      });
+    }
   };
 
   return (
@@ -194,6 +231,33 @@ export default function BodyMeasurementsAdmin() {
               image boundaries.
             </p>
           </div>
+
+          <div className="space-y-3 rounded-2xl border border-emerald-100 bg-white/90 p-4 text-sm text-emerald-800/80">
+            <div className="space-y-1">
+              <h3 className="text-sm font-semibold text-emerald-900">Layout configuration JSON</h3>
+              <p className="text-xs text-emerald-800/70">
+                Copy this configuration after saving to back up the current layout. Paste a saved JSON and import it to restore a
+                layout without using the visual editor.
+              </p>
+            </div>
+            <textarea
+              value={layoutJson}
+              onChange={(event) => {
+                setLayoutJson(event.target.value);
+                setStatus(null);
+              }}
+              rows={12}
+              className="w-full rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2 font-mono text-xs text-emerald-900 shadow-inner focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              onClick={handleImportLayout}
+              className="w-full rounded-full border border-emerald-300 bg-emerald-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-emerald-800 transition-colors hover:border-emerald-400 hover:bg-emerald-200/80 hover:text-emerald-900"
+            >
+              Import layout from JSON
+            </button>
+          </div>
         </aside>
 
         <section className="space-y-6 rounded-3xl border border-emerald-100 bg-white/70 p-6 shadow-lg shadow-emerald-100/60">
@@ -240,9 +304,15 @@ export default function BodyMeasurementsAdmin() {
             </div>
           </div>
 
-          {statusMessage ? (
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-              {statusMessage}
+          {status ? (
+            <div
+              className={`rounded-2xl px-4 py-3 text-sm ${
+                status.tone === "error"
+                  ? "border border-red-200 bg-red-50 text-red-700"
+                  : "border border-emerald-200 bg-emerald-50 text-emerald-800"
+              }`}
+            >
+              {status.message}
             </div>
           ) : null}
 
