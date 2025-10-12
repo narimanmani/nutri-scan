@@ -112,6 +112,19 @@ async function ensureSchema() {
   `);
 
   await query(`
+    ALTER TABLE meals
+    ADD COLUMN IF NOT EXISTS payload jsonb DEFAULT '{}'::jsonb;
+  `);
+
+  await query(`
+    UPDATE meals SET payload = '{}'::jsonb WHERE payload IS NULL;
+  `);
+
+  await query(`
+    ALTER TABLE meals ALTER COLUMN payload SET NOT NULL;
+  `);
+
+  await query(`
     CREATE TABLE IF NOT EXISTS diet_plans (
       id text PRIMARY KEY,
       user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -120,6 +133,19 @@ async function ensureSchema() {
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+  `);
+
+  await query(`
+    ALTER TABLE diet_plans
+    ADD COLUMN IF NOT EXISTS payload jsonb DEFAULT '{}'::jsonb;
+  `);
+
+  await query(`
+    UPDATE diet_plans SET payload = '{}'::jsonb WHERE payload IS NULL;
+  `);
+
+  await query(`
+    ALTER TABLE diet_plans ALTER COLUMN payload SET NOT NULL;
   `);
 
   await query(`
