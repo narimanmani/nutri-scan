@@ -1,19 +1,29 @@
 const { Pool } = require('pg');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+
 let mealsSeed = [];
 let dietPlansSeed = [];
 
-try {
-  mealsSeed = require('../../src/data/meals.json');
-} catch (error) {
-  console.warn('Meal seed data unavailable, continuing without sample meals.', error);
+function loadSeed(relativePath, label) {
+  try {
+    const resolvedPath = path.resolve(__dirname, relativePath);
+    if (!fs.existsSync(resolvedPath)) {
+      console.warn(`${label} seed data unavailable at ${resolvedPath}, continuing without sample data.`);
+      return [];
+    }
+
+    // eslint-disable-next-line import/no-dynamic-require, global-require
+    return require(resolvedPath);
+  } catch (error) {
+    console.warn(`${label} seed data unavailable, continuing without sample data.`, error);
+    return [];
+  }
 }
 
-try {
-  dietPlansSeed = require('../../src/data/dietPlans.json');
-} catch (error) {
-  console.warn('Diet plan seed data unavailable, continuing without sample diet plans.', error);
-}
+mealsSeed = loadSeed('../../src/data/meals.json', 'Meal');
+dietPlansSeed = loadSeed('../../src/data/dietPlans.json', 'Diet plan');
 
 const DEFAULT_MEASUREMENT_POSITIONS = {
   chest: { point: { x: 50, y: 30 }, anchor: { x: 82, y: 30 } },
