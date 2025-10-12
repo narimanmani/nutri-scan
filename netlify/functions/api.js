@@ -1103,57 +1103,6 @@ const getSqlClient = (() => {
       sql.json = (value) => JSON.stringify(value ?? null);
     }
 
-    if (typeof sql.query !== 'function') {
-      sql.query = (query, params = []) => {
-        let text = query;
-        let values = Array.isArray(params) ? params : [];
-
-        if (query && typeof query === 'object') {
-          if (Array.isArray(query.values)) {
-            values = query.values;
-          } else if (Array.isArray(query.args)) {
-            values = query.args;
-          }
-
-          if (typeof query.text === 'string') {
-            text = query.text;
-          }
-        }
-
-        if (Array.isArray(text) && Array.isArray(text.raw)) {
-          return sql(text, ...values);
-        }
-
-        if (typeof text !== 'string') {
-          throw new Error('sql.query fallback requires a query string.');
-        }
-
-        const segments = [];
-        const bindings = [];
-        let cursor = 0;
-
-        for (let index = 0; index < values.length; index += 1) {
-          const placeholder = `$${index + 1}`;
-          const position = text.indexOf(placeholder, cursor);
-
-          if (position === -1) {
-            throw new Error(`Missing placeholder ${placeholder} in query: ${text}`);
-          }
-
-          segments.push(text.slice(cursor, position));
-          bindings.push(values[index]);
-          cursor = position + placeholder.length;
-        }
-
-        segments.push(text.slice(cursor));
-
-        const template = segments.slice();
-        template.raw = segments.slice();
-
-        return sql(template, ...bindings);
-      };
-    }
-
     return sql;
   }
 
@@ -1196,6 +1145,71 @@ function serializeForJsonb(value) {
     console.error('Failed to serialize value for jsonb column.', error, value);
     return JSON.stringify(null);
   }
+}
+
+function buildTemplateFromQuery(text, values) {
+  if (typeof text !== 'string') {
+    throw new Error('executeQuery requires a SQL string when query() is unavailable.');
+  }
+
+  const segments = [];
+  let cursor = 0;
+
+  for (let index = 0; index < values.length; index += 1) {
+    const placeholder = `$${index + 1}`;
+    const position = text.indexOf(placeholder, cursor);
+
+    if (position === -1) {
+      throw new Error(`Missing placeholder ${placeholder} in query: ${text}`);
+    }
+
+    segments.push(text.slice(cursor, position));
+    cursor = position + placeholder.length;
+  }
+
+  segments.push(text.slice(cursor));
+
+  const template = segments.slice();
+  template.raw = segments.slice();
+
+  return template;
+}
+
+async function executeQuery(sql, query, params = []) {
+  if (!sql || typeof sql !== 'function') {
+    throw new Error('Invalid SQL client provided to executeQuery.');
+  }
+
+  if (typeof sql.query === 'function') {
+    return sql.query(query, params);
+  }
+
+  let text = query;
+  let values = Array.isArray(params) ? params : [];
+
+  if (query && typeof query === 'object' && !Array.isArray(query)) {
+    if (Array.isArray(query.values)) {
+      values = query.values;
+    } else if (Array.isArray(query.args)) {
+      values = query.args;
+    }
+
+    if (Array.isArray(query.text) && Array.isArray(query.text.raw)) {
+      return sql(query.text, ...values);
+    }
+
+    if (typeof query.text === 'string') {
+      text = query.text;
+    }
+  }
+
+  if (Array.isArray(text) && Array.isArray(text.raw)) {
+    return sql(text, ...values);
+  }
+
+  const template = buildTemplateFromQuery(text, values);
+
+  return sql(template, ...values);
 }
 
 let schemaInitializationPromise = null;
@@ -1450,7 +1464,8 @@ async function initializeDatabase(sql = getSqlClient()) {
   if (mealCount === 0 && Array.isArray(mealsSeed)) {
     for (let index = 0; index < mealsSeed.length; index += 1) {
       const normalized = normalizeMealForStorage(mealsSeed[index], index);
-      await sql.query(
+      await executeQuery(
+        sql,
         `
           INSERT INTO meals (id, created_date, data)
           VALUES ($1, $2, $3::jsonb)
@@ -1482,7 +1497,8 @@ async function initializeDatabase(sql = getSqlClient()) {
     }
 
     for (const plan of seededPlans) {
-      await sql.query(
+      await executeQuery(
+        sql,
         `
           INSERT INTO diet_plans (id, is_active, created_at, updated_at, data)
           VALUES ($1, $2, $3, $4, $5::jsonb)
@@ -1522,7 +1538,8 @@ function extractRows(result) {
 }
 
 async function upsertMeal(sql, meal) {
-  const result = await sql.query(
+  const result = await executeQuery(
+    sql,
     `
       INSERT INTO meals (id, created_date, data)
       VALUES ($1, $2, $3::jsonb)
@@ -1544,7 +1561,8 @@ async function upsertMeal(sql, meal) {
 }
 
 async function upsertDietPlan(sql, plan) {
-  const result = await sql.query(
+  const result = await executeQuery(
+    sql,
     `
       INSERT INTO diet_plans (id, is_active, created_at, updated_at, data)
       VALUES ($1, $2, $3, $4, $5::jsonb)
