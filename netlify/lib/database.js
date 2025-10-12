@@ -1,14 +1,19 @@
 const { Pool } = require('pg');
 const crypto = require('crypto');
-const path = require('path');
-const fs = require('fs');
+let mealsSeed = [];
+let dietPlansSeed = [];
 
-const mealsSeed = JSON.parse(
-  fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'data', 'meals.json'), 'utf8')
-);
-const dietPlansSeed = JSON.parse(
-  fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'data', 'dietPlans.json'), 'utf8')
-);
+try {
+  mealsSeed = require('../../src/data/meals.json');
+} catch (error) {
+  console.warn('Meal seed data unavailable, continuing without sample meals.', error);
+}
+
+try {
+  dietPlansSeed = require('../../src/data/dietPlans.json');
+} catch (error) {
+  console.warn('Diet plan seed data unavailable, continuing without sample diet plans.', error);
+}
 
 const DEFAULT_MEASUREMENT_POSITIONS = {
   chest: { point: { x: 50, y: 30 }, anchor: { x: 82, y: 30 } },
@@ -206,6 +211,10 @@ async function ensureUser({ username, password, role }, bcrypt) {
 }
 
 async function ensureDietPlanSeed(userId) {
+  if (!Array.isArray(dietPlansSeed) || dietPlansSeed.length === 0) {
+    return;
+  }
+
   for (const [index, plan] of dietPlansSeed.entries()) {
     const planId = plan.id || `diet_plan_${crypto.randomUUID()}`;
     const { rows } = await query('SELECT id FROM diet_plans WHERE id = $1', [planId]);
@@ -229,6 +238,10 @@ async function ensureDietPlanSeed(userId) {
 }
 
 async function ensureMealSeed(userId) {
+  if (!Array.isArray(mealsSeed) || mealsSeed.length === 0) {
+    return;
+  }
+
   for (const meal of mealsSeed) {
     const mealId = meal.id || `meal_${crypto.randomUUID()}`;
     const { rows } = await query('SELECT id FROM meals WHERE id = $1', [mealId]);
