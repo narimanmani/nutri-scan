@@ -2,7 +2,6 @@
 const { Pool } = require('@neondatabase/serverless');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const { nanoid } = require('nanoid');
 const { readFileSync } = require('fs');
 const { resolve } = require('path');
 
@@ -24,6 +23,13 @@ function getPool() {
 
 function createId(prefix) {
   return `${prefix}_${crypto.randomUUID()}`;
+}
+
+function generateToken(length = 64) {
+  const bytes = crypto.randomBytes(Math.ceil((length * 3) / 4));
+  return bytes
+    .toString('base64url')
+    .slice(0, length);
 }
 
 function loadJson(relativePath) {
@@ -216,7 +222,7 @@ async function seedDefaults() {
   );
   if ((historyCountRows[0]?.count || 0) === 0 && Array.isArray(measurementHistorySeed)) {
     for (const entry of measurementHistorySeed) {
-      const historyId = entry.id || nanoid();
+      const historyId = entry.id || createId('measurement_history');
       await getPool().query(
         'INSERT INTO measurement_history (id, user_id, payload, recorded_at) VALUES ($1, $2, $3::jsonb, COALESCE($4::timestamptz, NOW())) ON CONFLICT (id) DO NOTHING',
         [historyId, sampleUserId, JSON.stringify({ ...entry, user_id: sampleUserId }), entry.recordedAt || entry.recorded_at]
@@ -237,7 +243,7 @@ function hashToken(token) {
 }
 
 async function createSession(userId, ttlHours = 48) {
-  const token = nanoid(64);
+  const token = generateToken(64);
   const tokenHash = hashToken(token);
   const id = createId('session');
   const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
