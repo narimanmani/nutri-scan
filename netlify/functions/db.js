@@ -43,6 +43,39 @@ function loadJson(relativePath) {
   }
 }
 
+function isForeignKeyError(error) {
+  return error?.code === '42830';
+}
+
+async function createTableWithFallback(client, tableName, primarySql, fallbackSql) {
+  try {
+    await client.query(primarySql);
+  } catch (error) {
+    if (isForeignKeyError(error) && fallbackSql) {
+      console.warn(
+        `Falling back to reduced constraints for ${tableName} due to foreign key error: ${error.message}`
+      );
+      await client.query(fallbackSql);
+    } else {
+      throw error;
+    }
+  }
+}
+
+async function ensureUniqueIndex(client, indexSql, identifier) {
+  try {
+    await client.query(indexSql);
+  } catch (error) {
+    if (error?.code === '23505') {
+      console.warn(
+        `Unable to create unique index ${identifier} due to duplicate data; existing records will be left as-is.`
+      );
+    } else {
+      throw error;
+    }
+  }
+}
+
 async function ensureSchema() {
   if (schemaReady || !CONNECTION_URL) {
     return;
@@ -63,57 +96,130 @@ async function ensureSchema() {
       )
     `);
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        token_hash TEXT NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        expires_at TIMESTAMPTZ NOT NULL
-      )
-    `);
+    await createTableWithFallback(
+      client,
+      'sessions',
+      `
+        CREATE TABLE IF NOT EXISTS sessions (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token_hash TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          expires_at TIMESTAMPTZ NOT NULL
+        )
+      `,
+      `
+        CREATE TABLE IF NOT EXISTS sessions (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          token_hash TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          expires_at TIMESTAMPTZ NOT NULL
+        )
+      `
+    );
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS meals (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        payload JSONB NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
+    await createTableWithFallback(
+      client,
+      'meals',
+      `
+        CREATE TABLE IF NOT EXISTS meals (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          payload JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `,
+      `
+        CREATE TABLE IF NOT EXISTS meals (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          payload JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `
+    );
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS diet_plans (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        payload JSONB NOT NULL,
-        is_active BOOLEAN NOT NULL DEFAULT FALSE,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
+    await createTableWithFallback(
+      client,
+      'diet_plans',
+      `
+        CREATE TABLE IF NOT EXISTS diet_plans (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          payload JSONB NOT NULL,
+          is_active BOOLEAN NOT NULL DEFAULT FALSE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `,
+      `
+        CREATE TABLE IF NOT EXISTS diet_plans (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          payload JSONB NOT NULL,
+          is_active BOOLEAN NOT NULL DEFAULT FALSE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `
+    );
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS measurement_positions (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        kind TEXT NOT NULL,
-        payload JSONB NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (user_id, kind)
-      )
-    `);
+    await createTableWithFallback(
+      client,
+      'measurement_positions',
+      `
+        CREATE TABLE IF NOT EXISTS measurement_positions (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL,
+          payload JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (user_id, kind)
+        )
+      `,
+      `
+        CREATE TABLE IF NOT EXISTS measurement_positions (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          payload JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (user_id, kind)
+        )
+      `
+    );
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS measurement_history (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        payload JSONB NOT NULL,
-        recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
+    await createTableWithFallback(
+      client,
+      'measurement_history',
+      `
+        CREATE TABLE IF NOT EXISTS measurement_history (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          payload JSONB NOT NULL,
+          recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `,
+      `
+        CREATE TABLE IF NOT EXISTS measurement_history (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          payload JSONB NOT NULL,
+          recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `
+    );
+
+    await ensureUniqueIndex(
+      client,
+      'CREATE UNIQUE INDEX IF NOT EXISTS measurement_positions_user_kind_idx ON measurement_positions (user_id, kind)',
+      'measurement_positions_user_kind_idx'
+    );
 
     await client.query('COMMIT');
   } catch (error) {
