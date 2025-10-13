@@ -1,4 +1,11 @@
-const { getStore } = require('@netlify/blobs');
+let getNetlifyStore;
+let netlifyBlobsLoadError;
+
+try {
+  ({ getStore: getNetlifyStore } = require('@netlify/blobs'));
+} catch (error) {
+  netlifyBlobsLoadError = error;
+}
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 
@@ -1188,9 +1195,21 @@ async function storeMealPhoto(imageDataUrl) {
   const { mimeType, buffer } = parseImageDataUrl(imageDataUrl);
   const fallback = { url: imageDataUrl, key: null, stored: false };
 
+  if (!getNetlifyStore) {
+    if (netlifyBlobsLoadError) {
+      console.warn(
+        'Netlify Blob storage client is not available. Falling back to inline photo URLs.',
+        netlifyBlobsLoadError
+      );
+    } else {
+      console.warn('Netlify Blob storage client is not available. Using inline photo URL.');
+    }
+    return fallback;
+  }
+
   let store;
   try {
-    store = getStore({ name: process.env.MEAL_PHOTO_STORE || 'meal-photos' });
+    store = getNetlifyStore({ name: process.env.MEAL_PHOTO_STORE || 'meal-photos' });
   } catch (error) {
     console.warn('Netlify Blob storage is not available. Falling back to inline photo URLs.', error);
     return fallback;
