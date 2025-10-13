@@ -12,7 +12,7 @@ const {
   getSession,
   deleteSession,
 } = require('./db');
-const defaultMeasurementPositions = require('../src/data/bodyMeasurementDefaults.json');
+const defaultMeasurementPositions = require('../../src/data/bodyMeasurementDefaults.json');
 
 const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 20000);
 const OPENAI_ANALYSIS_TIMEOUT_MS = Number(
