@@ -59,6 +59,6 @@ npm run build
 
 - **Image analysis**: The upload flow converts photos to base64 data URLs and proxies them through a Netlify function that invokes OpenAI GPT-4o (vision + text) for calorie and macronutrient estimates with aggressive caching and configurable timeouts to reduce first-call stalls.
 - **Storage**: Meals, diet plans, and measurement data are stored in PostgreSQL. The Netlify function lazily creates the schema, seeds default content, and persists per-user records using secure sessions.
-- **Authentication**: Users register and authenticate through the Netlify API, which hashes passwords with bcrypt, stores session tokens securely, and gates routes/menus by role. A `sample_user` (`sampleUser234!@`) and `admin` (`sampleAdmin234!@`) account are created automatically for demos.
+- **Authentication**: Users register and authenticate through the Netlify API, which hashes passwords with PBKDF2 (using the Node.js crypto library), stores session tokens securely, and gates routes/menus by role. A `sample_user` (`sampleUser234!@`) and `admin` (`sampleAdmin234!@`) account are created automatically for demos.
 - **Ingredient suggestions**: Ingredient lookups and per-ingredient calorie estimates are proxied through the Netlify function to the OpenAI API for contextual results. When the key is missing or OpenAI cannot be reached, the UI falls back to a curated set of common foods with per-gram nutrition data.
 - **Mock mode**: When no API keys are configured, realistic mock responses are returned so the experience can be demonstrated without external calls.

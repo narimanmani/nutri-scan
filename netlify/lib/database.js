@@ -366,13 +366,84 @@ async function getUserById(id) {
   return rows[0] || null;
 }
 
-async function hashPassword(password, bcrypt) {
-  const saltRounds = 12;
-  return bcrypt.hash(password, saltRounds);
+const PASSWORD_SALT_BYTES = 16;
+const PASSWORD_ITERATIONS = 120000;
+const PASSWORD_KEY_LENGTH = 64;
+const PASSWORD_DIGEST = 'sha512';
+const PASSWORD_PREFIX = 'pbkdf2';
+
+function pbkdf2(password, salt, iterations, keyLength, digest) {
+  return new Promise((resolve, reject) => {
+    crypto.pbkdf2(password, salt, iterations, keyLength, digest, (error, derivedKey) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve(derivedKey);
+    });
+  });
 }
 
-async function verifyPassword(password, hash, bcrypt) {
-  return bcrypt.compare(password, hash);
+function isBcryptHash(hash) {
+  return typeof hash === 'string' && hash.startsWith('$2');
+}
+
+async function hashPassword(password) {
+  if (typeof password !== 'string' || password.length === 0) {
+    throw new Error('Password must be a non-empty string');
+  }
+
+  const salt = crypto.randomBytes(PASSWORD_SALT_BYTES);
+  const derivedKey = await pbkdf2(password, salt, PASSWORD_ITERATIONS, PASSWORD_KEY_LENGTH, PASSWORD_DIGEST);
+
+  return [
+    PASSWORD_PREFIX,
+    PASSWORD_ITERATIONS,
+    PASSWORD_DIGEST,
+    salt.toString('hex'),
+    derivedKey.toString('hex')
+  ].join('$');
+}
+
+async function verifyPassword(password, hash) {
+  if (typeof hash !== 'string' || hash.length === 0) {
+    return false;
+  }
+
+  if (isBcryptHash(hash)) {
+    try {
+      // Attempt to use bcrypt when the hash comes from an older installation
+      // that stored credentials with bcrypt before the dependency became
+      // unavailable in restricted environments.
+      const bcrypt = require('bcryptjs');
+      return bcrypt.compare(password, hash);
+    } catch (error) {
+      console.warn('Encountered legacy bcrypt hash but bcryptjs is unavailable.');
+      return false;
+    }
+  }
+
+  const parts = hash.split('$');
+  if (parts.length !== 5 || parts[0] !== PASSWORD_PREFIX) {
+    return false;
+  }
+
+  const iterations = Number.parseInt(parts[1], 10);
+  const digest = parts[2];
+  const salt = Buffer.from(parts[3], 'hex');
+  const stored = Buffer.from(parts[4], 'hex');
+
+  if (!Number.isFinite(iterations) || !digest || salt.length === 0 || stored.length === 0) {
+    return false;
+  }
+
+  const derived = await pbkdf2(password, salt, iterations, stored.length, digest);
+  if (derived.length !== stored.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(stored, derived);
 }
 
 function generateSessionToken() {
@@ -417,14 +488,22 @@ async function deleteSession(token) {
   await query('DELETE FROM sessions WHERE token_hash = $1', [tokenHash]);
 }
 
-async function ensureUser({ username, password, role }, bcrypt) {
+async function ensureUser({ username, password, role }) {
   const normalizedUsername = String(username).trim().toLowerCase();
   const existing = await getUserByUsername(normalizedUsername);
   if (existing) {
+    if (existing.password_hash && isBcryptHash(existing.password_hash)) {
+      const passwordHash = await hashPassword(password);
+      const { rows } = await query('UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING *', [
+        passwordHash,
+        existing.id
+      ]);
+      return rows[0];
+    }
     return existing;
   }
 
-  const passwordHash = await hashPassword(password, bcrypt);
+  const passwordHash = await hashPassword(password);
   const { rows } = await query(
     'INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING *',
     [generateId(), normalizedUsername, passwordHash, role]
@@ -548,15 +627,9 @@ async function ensureMeasurementDefaults(userId) {
   );
 }
 
-async function seedInitialData(bcrypt) {
-  const sampleUser = await ensureUser(
-    { username: 'sample_user', password: 'sampleUser234!@', role: 'user' },
-    bcrypt
-  );
-  const adminUser = await ensureUser(
-    { username: 'admin', password: 'sampleAdmin234!@', role: 'admin' },
-    bcrypt
-  );
+async function seedInitialData() {
+  const sampleUser = await ensureUser({ username: 'sample_user', password: 'sampleUser234!@', role: 'user' });
+  const adminUser = await ensureUser({ username: 'admin', password: 'sampleAdmin234!@', role: 'admin' });
 
   await ensureMealSeed(sampleUser.id);
   await ensureDietPlanSeed(sampleUser.id);

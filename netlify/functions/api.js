@@ -7,7 +7,6 @@ try {
   netlifyBlobsLoadError = error;
 }
 const crypto = require('crypto');
-const bcrypt = require('bcryptjs');
 
 const {
   ensureSchema,
@@ -257,7 +256,7 @@ async function bootstrap() {
   if (!bootstrapPromise) {
     bootstrapPromise = (async () => {
       await ensureSchema();
-      await seedInitialData(bcrypt);
+      await seedInitialData();
     })().catch((error) => {
       // Allow subsequent requests to retry initialization if a transient
       // failure (such as a cold database connection) occurs during the
@@ -1435,7 +1434,7 @@ async function handleRequest(event) {
       return jsonResponse(409, { error: 'Username already exists.' }, event);
     }
 
-    const passwordHash = await hashPassword(password, bcrypt);
+    const passwordHash = await hashPassword(password);
     const userId = crypto.randomUUID();
     const { rows } = await query(
       'INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, username, role',
@@ -1472,7 +1471,7 @@ async function handleRequest(event) {
       return jsonResponse(401, { error: 'Invalid credentials.' }, event);
     }
 
-    const isValid = await verifyPassword(password, user.password_hash, bcrypt);
+    const isValid = await verifyPassword(password, user.password_hash);
     if (!isValid) {
       return jsonResponse(401, { error: 'Invalid credentials.' }, event);
     }
