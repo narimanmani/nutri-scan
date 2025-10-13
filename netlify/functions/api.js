@@ -258,7 +258,13 @@ async function bootstrap() {
     bootstrapPromise = (async () => {
       await ensureSchema();
       await seedInitialData(bcrypt);
-    })();
+    })().catch((error) => {
+      // Allow subsequent requests to retry initialization if a transient
+      // failure (such as a cold database connection) occurs during the
+      // first bootstrap attempt.
+      bootstrapPromise = null;
+      throw error;
+    });
   }
 
   return bootstrapPromise;
@@ -1496,6 +1502,16 @@ async function handleRequest(event) {
     return jsonResponse(200, { success: true }, event, { 'Set-Cookie': clearCookie });
   }
 
+  if (subPath === '/auth/session' && event.httpMethod === 'GET') {
+    try {
+      const user = await getAuthenticatedUser(event);
+      return jsonResponse(200, { user: user || null }, event);
+    } catch (error) {
+      console.error('Failed to resolve auth session:', error);
+      return jsonResponse(503, { error: 'Session lookup temporarily unavailable.' }, event);
+    }
+  }
+
   if (subPath === '/auth/me' && event.httpMethod === 'GET') {
     const user = await getAuthenticatedUser(event);
     if (!user) {
@@ -1952,8 +1968,8 @@ async function handleRequest(event) {
       }
 
       try {
-        const { url, key } = await storeMealPhoto(imageDataUrl);
-        return jsonResponse(200, { url, key });
+        const { url, key, stored } = await storeMealPhoto(imageDataUrl);
+        return jsonResponse(200, { url, key, stored: stored ?? Boolean(key) });
       } catch (error) {
         console.error('Failed to store meal photo in Netlify Blobs:', error);
         return jsonResponse(502, {
