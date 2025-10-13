@@ -1,0 +1,11 @@
+{
+  "chest": { "point": { "x": 50, "y": 30 }, "anchor": { "x": 82, "y": 30 } },
+  "shoulder": { "point": { "x": 50, "y": 24 }, "anchor": { "x": 82, "y": 24 } },
+  "waist": { "point": { "x": 50, "y": 47 }, "anchor": { "x": 82, "y": 47 } },
+  "abdomen": { "point": { "x": 50, "y": 54 }, "anchor": { "x": 82, "y": 54 } },
+  "hips": { "point": { "x": 50, "y": 63 }, "anchor": { "x": 82, "y": 63 } },
+  "leftArm": { "point": { "x": 35, "y": 38 }, "anchor": { "x": 18, "y": 38 } },
+  "rightArm": { "point": { "x": 65, "y": 38 }, "anchor": { "x": 82, "y": 38 } },
+  "leftThigh": { "point": { "x": 40, "y": 72 }, "anchor": { "x": 22, "y": 72 } },
+  "rightThigh": { "point": { "x": 60, "y": 72 }, "anchor": { "x": 78, "y": 72 } }
+}

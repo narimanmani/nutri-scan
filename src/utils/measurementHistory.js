@@ -1,52 +1,32 @@
-const MEASUREMENT_HISTORY_KEY = "measurementHistoryEntries";
+import { get, post, del } from '@/api/client.js';
 
-function isBrowser() {
-  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
-}
-
-export function loadMeasurementHistory() {
-  if (!isBrowser()) {
-    return [];
-  }
-
+export async function loadMeasurementHistory() {
   try {
-    const stored = window.localStorage.getItem(MEASUREMENT_HISTORY_KEY);
-    if (!stored) {
-      return [];
-    }
-
-    const parsed = JSON.parse(stored);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed;
+    const { history = [] } = await get('/measurement-history');
+    return history;
   } catch (error) {
-    console.warn("Failed to load measurement history", error);
-    return [];
+    console.warn('Failed to load measurement history', error);
+    throw error;
   }
 }
 
-export function saveMeasurementEntry(entry) {
-  if (!isBrowser()) {
-    return;
-  }
-
+export async function saveMeasurementEntry(entry) {
   try {
-    const history = loadMeasurementHistory();
-    const nextHistory = [entry, ...history];
-    window.localStorage.setItem(MEASUREMENT_HISTORY_KEY, JSON.stringify(nextHistory));
+    const { entry: saved } = await post('/measurement-history', entry);
+    return saved;
   } catch (error) {
-    console.warn("Failed to save measurement entry", error);
+    console.warn('Failed to save measurement entry', error);
+    throw error;
   }
 }
 
-export function clearMeasurementHistory() {
-  if (!isBrowser()) {
-    return;
+export async function clearMeasurementHistory() {
+  try {
+    await del('/measurement-history');
+  } catch (error) {
+    console.warn('Failed to clear measurement history', error);
+    throw error;
   }
-
-  window.localStorage.removeItem(MEASUREMENT_HISTORY_KEY);
 }
 
-export const MEASUREMENT_HISTORY_STORAGE_KEY = MEASUREMENT_HISTORY_KEY;
+export const MEASUREMENT_HISTORY_STORAGE_KEY = 'measurementHistoryEntries';

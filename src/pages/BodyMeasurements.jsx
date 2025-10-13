@@ -53,16 +53,26 @@ export default function BodyMeasurements() {
   const baseImage = useMemo(() => getSilhouetteAsset("front"), []);
 
   useEffect(() => {
-    const storedPositions = loadMeasurementPositions();
-    if (storedPositions) {
-      setPositions(storedPositions);
-      return;
-    }
+    let isMounted = true;
 
-    const defaults = getDefaultMeasurementPositions();
-    if (defaults) {
-      setPositions(defaults);
-    }
+    loadMeasurementPositions()
+      .then((stored) => {
+        if (!isMounted) return;
+        if (stored) {
+          setPositions(stored);
+          return;
+        }
+        setPositions(getDefaultMeasurementPositions());
+      })
+      .catch(() => {
+        if (isMounted) {
+          setPositions(getDefaultMeasurementPositions());
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const measurementFields = useMemo(
@@ -88,7 +98,7 @@ export default function BodyMeasurements() {
     }));
   };
 
-  const handleSaveMeasurements = () => {
+  const handleSaveMeasurements = async () => {
     const errors = [];
 
     const gender = profile.gender;
@@ -158,16 +168,21 @@ export default function BodyMeasurements() {
       weightUnit: "kg",
     };
 
-    saveMeasurementEntry(entry);
-    setStatus({
-      type: "success",
-      message: `Measurements saved! Height ${formatNumber(convertedHeight)} cm, weight ${formatNumber(
-        convertedWeight
-      )} kg. View analytics in the Measurement Intelligence section.`,
-    });
+    try {
+      await saveMeasurementEntry(entry);
+      setStatus({
+        type: "success",
+        message: `Measurements saved! Height ${formatNumber(convertedHeight)} cm, weight ${formatNumber(
+          convertedWeight
+        )} kg. View analytics in the Measurement Intelligence section.`,
+      });
 
-    setValues(createInitialValues(DEFAULT_MEASUREMENT_FIELDS));
-    setProfile({ gender: "", age: "", height: "", weight: "" });
+      setValues(createInitialValues(DEFAULT_MEASUREMENT_FIELDS));
+      setProfile({ gender: "", age: "", height: "", weight: "" });
+    } catch (error) {
+      console.error("Failed to save measurement entry", error);
+      setStatus({ type: "error", message: "We could not save your measurements. Please try again." });
+    }
   };
 
   return (

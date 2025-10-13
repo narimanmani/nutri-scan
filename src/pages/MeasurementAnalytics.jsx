@@ -1,7 +1,6 @@
 import PropTypes from "prop-types";
 import { useEffect, useMemo, useState } from "react";
 import { loadMeasurementHistory } from "@/utils/measurementHistory.js";
-import { SAMPLE_MEASUREMENT_HISTORY } from "@/data/sampleMeasurementHistory.js";
 
 const HEIGHT_RANGE_CM = { min: 120, max: 230 };
 const WEIGHT_RANGE_KG = { min: 30, max: 250 };
@@ -116,14 +115,6 @@ BodyShapeIcon.propTypes = {
   shape: PropTypes.string,
   variant: PropTypes.oneOf(["table", "hero"]),
 };
-
-function buildMeasurementHistory() {
-  const saved = loadMeasurementHistory();
-  const combined = [...SAMPLE_MEASUREMENT_HISTORY, ...saved];
-  return combined
-    .map((entry) => normaliseEntry(entry))
-    .sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime());
-}
 
 function normaliseEntry(entry) {
   const measurements = Object.entries(entry.measurements || {}).reduce((acc, [key, value]) => {
@@ -629,11 +620,29 @@ export default function MeasurementAnalytics() {
   const [selectedId, setSelectedId] = useState(null);
 
   useEffect(() => {
-    const data = buildMeasurementHistory();
-    setHistory(data);
-    if (data.length) {
-      setSelectedId(data[0].id);
-    }
+    let isActive = true;
+
+    loadMeasurementHistory()
+      .then((records) => {
+        if (!isActive) return;
+        const data = records
+          .map((entry) => normaliseEntry(entry))
+          .sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime());
+        setHistory(data);
+        if (data.length) {
+          setSelectedId(data[0].id);
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to build measurement history', error);
+        if (isActive) {
+          setHistory([]);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
   }, []);
 
   const selectedEntry = useMemo(

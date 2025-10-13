@@ -11,6 +11,7 @@ import {
   getActiveDietPlan,
   getDietPlanById,
 } from './storage';
+import { get, post } from './client.js';
 
 export const Meal = {
   list: (order, limit) => listMeals(order, limit),
@@ -22,7 +23,19 @@ export const Meal = {
 
 export const User = {
   async getCurrentUser() {
-    throw new Error('User management is not configured for the offline storage demo.');
+    const { user } = await get('/auth/session');
+    return user;
+  },
+  async register(credentials) {
+    const { user } = await post('/auth/register', credentials);
+    return user;
+  },
+  async login(credentials) {
+    const { user } = await post('/auth/login', credentials);
+    return user;
+  },
+  async logout() {
+    await post('/auth/logout', {});
   }
 };
 
