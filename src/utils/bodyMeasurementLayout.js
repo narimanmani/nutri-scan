@@ -1,6 +1,3 @@
-export const BODY_MEASUREMENT_STORAGE_KEY = "bodyMeasurementPositions";
-export const BODY_MEASUREMENT_DEFAULT_KEY = "bodyMeasurementDefaultPositions";
-
 export const DEFAULT_MEASUREMENT_FIELDS = [
   {
     id: "chest",
@@ -106,93 +103,6 @@ export function normalizeMeasurementPositions(positions) {
 
     return accumulator;
   }, {});
-}
-
-export function loadMeasurementPositions() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  try {
-    const stored = window.localStorage.getItem(BODY_MEASUREMENT_STORAGE_KEY);
-    if (!stored) {
-      return null;
-    }
-
-    const parsed = JSON.parse(stored);
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-
-    return normalizeMeasurementPositions(parsed);
-  } catch (error) {
-    console.warn("Failed to parse stored measurement positions", error);
-    return null;
-  }
-}
-
-export function saveMeasurementPositions(positions) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  const normalized = normalizeMeasurementPositions(positions);
-  window.localStorage.setItem(
-    BODY_MEASUREMENT_STORAGE_KEY,
-    JSON.stringify(normalized)
-  );
-}
-
-export function clearMeasurementPositions() {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  window.localStorage.removeItem(BODY_MEASUREMENT_STORAGE_KEY);
-}
-
-export function loadDefaultMeasurementOverride() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  try {
-    const stored = window.localStorage.getItem(BODY_MEASUREMENT_DEFAULT_KEY);
-    if (!stored) {
-      return null;
-    }
-
-    const parsed = JSON.parse(stored);
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-
-    return normalizeMeasurementPositions(parsed);
-  } catch (error) {
-    console.warn("Failed to parse stored default measurement positions", error);
-    return null;
-  }
-}
-
-export function saveDefaultMeasurementPositions(positions) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  const normalized = normalizeMeasurementPositions(positions);
-  window.localStorage.setItem(
-    BODY_MEASUREMENT_DEFAULT_KEY,
-    JSON.stringify(normalized)
-  );
-}
-
-export function getDefaultMeasurementPositions() {
-  const override = loadDefaultMeasurementOverride();
-  if (override) {
-    return override;
-  }
-
-  return createDefaultMeasurementPositions();
 }
 
 export function mergeFieldsWithPositions(fields, positions) {

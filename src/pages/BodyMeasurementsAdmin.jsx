@@ -2,36 +2,64 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getSilhouetteAsset } from "@/utils/wgerAssets.js";
 import {
   DEFAULT_MEASUREMENT_FIELDS,
-  clearMeasurementPositions,
-  getDefaultMeasurementPositions,
-  loadDefaultMeasurementOverride,
-  loadMeasurementPositions,
+  createDefaultMeasurementPositions,
   mergeFieldsWithPositions,
-  saveDefaultMeasurementPositions,
-  saveMeasurementPositions,
 } from "@/utils/bodyMeasurementLayout.js";
+import { fetchMeasurementLayout, saveMeasurementLayout } from "@/api/measurements";
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function areLayoutsEqual(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export default function BodyMeasurementsAdmin() {
-  const [positions, setPositions] = useState(() => {
-    const stored = loadMeasurementPositions();
-    return stored || getDefaultMeasurementPositions();
-  });
+  const [positions, setPositions] = useState(() => createDefaultMeasurementPositions());
   const [selectedFieldId, setSelectedFieldId] = useState(DEFAULT_MEASUREMENT_FIELDS[0].id);
   const [isDirty, setIsDirty] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [dragState, setDragState] = useState(null);
   const svgRef = useRef(null);
   const baseImage = useMemo(() => getSilhouetteAsset("front"), []);
-  const [hasCustomDefault, setHasCustomDefault] = useState(() => Boolean(loadDefaultMeasurementOverride()));
+  const [hasCustomDefault, setHasCustomDefault] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   const measurementFields = useMemo(
     () => mergeFieldsWithPositions(DEFAULT_MEASUREMENT_FIELDS, positions),
     [positions]
   );
+
+  useEffect(() => {
+    let isMounted = true;
+
+    (async () => {
+      setIsLoading(true);
+      try {
+        const layout = await fetchMeasurementLayout();
+        if (isMounted && layout) {
+          setPositions(layout);
+          setHasCustomDefault(!areLayoutsEqual(layout, createDefaultMeasurementPositions()));
+        }
+      } catch (error) {
+        console.error("Failed to load measurement layout", error);
+        if (isMounted) {
+          const defaults = createDefaultMeasurementPositions();
+          setPositions(defaults);
+          setHasCustomDefault(false);
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const selectedField = measurementFields.find((field) => field.id === selectedFieldId) || measurementFields[0];
 
@@ -122,28 +150,45 @@ export default function BodyMeasurementsAdmin() {
     setDragState({ fieldId, target });
   };
 
-  const handleSave = () => {
-    saveMeasurementPositions(positions);
-    setIsDirty(false);
-    setStatusMessage("Measurement guides saved successfully.");
+  const handleSave = async () => {
+    try {
+      const saved = await saveMeasurementLayout(positions);
+      setPositions(saved);
+      setHasCustomDefault(!areLayoutsEqual(saved, createDefaultMeasurementPositions()));
+      setIsDirty(false);
+      setStatusMessage("Measurement guides saved successfully.");
+    } catch (error) {
+      console.error("Failed to save measurement layout", error);
+      setStatusMessage("Failed to save guides. Please try again.");
+    }
   };
 
-  const handleReset = () => {
-    const defaults = getDefaultMeasurementPositions();
-    clearMeasurementPositions();
+  const handleReset = async () => {
+    const defaults = createDefaultMeasurementPositions();
     setPositions(defaults);
     setIsDirty(false);
-    setStatusMessage(
-      hasCustomDefault ? "Guides reset to your saved default layout." : "Guides reset to default positions."
-    );
+
+    try {
+      await saveMeasurementLayout(defaults);
+      setHasCustomDefault(false);
+      setStatusMessage("Guides reset to default positions.");
+    } catch (error) {
+      console.error("Failed to reset guides", error);
+      setStatusMessage("Unable to reset guides. Please try again.");
+    }
   };
 
-  const handleSaveAsDefault = () => {
-    saveDefaultMeasurementPositions(positions);
-    saveMeasurementPositions(positions);
-    setHasCustomDefault(true);
-    setIsDirty(false);
-    setStatusMessage("Current layout saved as the new default for this device.");
+  const handleSaveAsDefault = async () => {
+    try {
+      const saved = await saveMeasurementLayout(positions);
+      setPositions(saved);
+      setHasCustomDefault(!areLayoutsEqual(saved, createDefaultMeasurementPositions()));
+      setIsDirty(false);
+      setStatusMessage("Current layout saved as your default configuration.");
+    } catch (error) {
+      console.error("Failed to save default layout", error);
+      setStatusMessage("Unable to save as default. Please try again.");
+    }
   };
 
   return (
@@ -234,8 +279,7 @@ export default function BodyMeasurementsAdmin() {
                 </button>
               </div>
               <p className="text-xs text-emerald-800/70 sm:text-right">
-                Saved defaults live in this device&apos;s browser storage, so they persist across app updates and redeployments
-                unless the local data is cleared.
+                Saved defaults are stored with your account, so they persist across devices and app updates.
               </p>
             </div>
           </div>
@@ -247,7 +291,11 @@ export default function BodyMeasurementsAdmin() {
           ) : null}
 
           <div className="relative mx-auto aspect-[3/5] w-full max-w-xl overflow-hidden rounded-[2.25rem] border border-emerald-100 bg-gradient-to-b from-emerald-50 via-white to-emerald-100 shadow-inner">
-            {baseImage ? (
+            {isLoading ? (
+              <div className="flex h-full w-full items-center justify-center text-sm text-emerald-600">
+                Loading layout...
+              </div>
+            ) : baseImage ? (
               <img
                 src={baseImage}
                 alt="Front anatomy silhouette"

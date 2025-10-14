@@ -4,6 +4,9 @@
 
 [functions]
   directory = "netlify/functions"
+  node_bundler = "esbuild"
+  external_node_modules = ["pg"]
+  included_files = ["netlify/lib/**", "src/data/**"]
 
 [[redirects]]
   from = "/api/*"
