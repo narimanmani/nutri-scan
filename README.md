@@ -56,7 +56,8 @@ npm run build
 ```
 
 The Netlify bundle is configured to ship the `pg` driver alongside the function code. Ensure dependencies are installed before
-deploying so the PostgreSQL client remains available at runtime.
+deploying so the PostgreSQL client remains available at runtime. The deployment also packages transitive utilities such as
+`postgres-interval` and `xtend` so all of the driver's parsing helpers resolve correctly in production.
 
 ## How It Works
 

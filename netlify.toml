@@ -21,7 +21,8 @@
     "node_modules/postgres-array/**",
     "node_modules/postgres-bytea/**",
     "node_modules/postgres-date/**",
-    "node_modules/postgres-interval/**"
+    "node_modules/postgres-interval/**",
+    "node_modules/xtend/**"
   ]
 
 [[redirects]]
