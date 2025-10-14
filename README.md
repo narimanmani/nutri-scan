@@ -55,6 +55,9 @@ A Vite + React application that analyzes meal photos using OpenAI GPT-4o and now
 npm run build
 ```
 
+The Netlify bundle is configured to ship the `pg` driver alongside the function code. Ensure dependencies are installed before
+deploying so the PostgreSQL client remains available at runtime.
+
 ## How It Works
 
 - **Image analysis**: The upload flow converts photos to base64 data URLs and proxies them through a Netlify function that invokes OpenAI GPT-4o (vision + text) for calorie and macronutrient estimates with aggressive caching and configurable timeouts to reduce first-call stalls.
