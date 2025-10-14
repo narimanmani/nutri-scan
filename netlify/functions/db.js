@@ -44,7 +44,15 @@ function loadJson(relativePath) {
 }
 
 function isForeignKeyError(error) {
-  return error?.code === '42830';
+  if (!error) {
+    return false;
+  }
+  const normalizedMessage = String(error.message || '').toLowerCase();
+  return (
+    error.code === '42830' ||
+    error.code === '0A000' ||
+    normalizedMessage.includes('foreign key constraint')
+  );
 }
 
 async function createTableWithFallback(client, tableName, primarySql, fallbackSql) {
