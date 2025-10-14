@@ -1,7 +1,7 @@
 import PropTypes from "prop-types";
 import { useEffect, useMemo, useState } from "react";
-import { loadMeasurementHistory } from "@/utils/measurementHistory.js";
 import { SAMPLE_MEASUREMENT_HISTORY } from "@/data/sampleMeasurementHistory.js";
+import { fetchMeasurementHistory } from "@/api/measurements";
 
 const HEIGHT_RANGE_CM = { min: 120, max: 230 };
 const WEIGHT_RANGE_KG = { min: 30, max: 250 };
@@ -116,14 +116,6 @@ BodyShapeIcon.propTypes = {
   shape: PropTypes.string,
   variant: PropTypes.oneOf(["table", "hero"]),
 };
-
-function buildMeasurementHistory() {
-  const saved = loadMeasurementHistory();
-  const combined = [...SAMPLE_MEASUREMENT_HISTORY, ...saved];
-  return combined
-    .map((entry) => normaliseEntry(entry))
-    .sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime());
-}
 
 function normaliseEntry(entry) {
   const measurements = Object.entries(entry.measurements || {}).reduce((acc, [key, value]) => {
@@ -627,13 +619,48 @@ function buildCombinedTips(shapeResult, somatotypeResult) {
 export default function MeasurementAnalytics() {
   const [history, setHistory] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(true);
 
   useEffect(() => {
-    const data = buildMeasurementHistory();
-    setHistory(data);
-    if (data.length) {
-      setSelectedId(data[0].id);
-    }
+    let isMounted = true;
+
+    (async () => {
+      setIsHistoryLoading(true);
+      try {
+        const saved = await fetchMeasurementHistory();
+        const combined = [
+          ...SAMPLE_MEASUREMENT_HISTORY,
+          ...(Array.isArray(saved) ? saved : [])
+        ];
+        const data = combined
+          .map((entry) => normaliseEntry(entry))
+          .sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime());
+
+        if (isMounted) {
+          setHistory(data);
+          if (data.length) {
+            setSelectedId(data[0].id);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load measurement history', error);
+        const fallback = SAMPLE_MEASUREMENT_HISTORY.map((entry) => normaliseEntry(entry));
+        if (isMounted) {
+          setHistory(fallback);
+          if (fallback.length) {
+            setSelectedId(fallback[0].id);
+          }
+        }
+      } finally {
+        if (isMounted) {
+          setIsHistoryLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const selectedEntry = useMemo(
@@ -710,12 +737,27 @@ export default function MeasurementAnalytics() {
               </tr>
             </thead>
             <tbody className="divide-y divide-emerald-100">
-              {history.map((entry) => {
-                const ratios = computeRatios(entry);
-                const shapeResult = classifyBodyShape(entry, ratios);
-                const shapeLabel = shapeResult.available ? shapeResult.primary : null;
-                return (
-                  <tr
+              {isHistoryLoading && (
+                <tr>
+                  <td colSpan={9} className="px-4 py-6 text-center text-sm text-emerald-700/80">
+                    Loading measurement history...
+                  </td>
+                </tr>
+              )}
+              {!isHistoryLoading && history.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="px-4 py-6 text-center text-sm text-emerald-700/80">
+                    No measurement records found yet.
+                  </td>
+                </tr>
+              )}
+              {!isHistoryLoading && history.length > 0 &&
+                history.map((entry) => {
+                  const ratios = computeRatios(entry);
+                  const shapeResult = classifyBodyShape(entry, ratios);
+                  const shapeLabel = shapeResult.available ? shapeResult.primary : null;
+                  return (
+                    <tr
                     key={entry.id}
                     className={`transition hover:bg-emerald-50/50 ${selectedId === entry.id ? "bg-emerald-50/80" : ""}`}
                   >
