@@ -48,14 +48,22 @@ function isForeignKeyError(error) {
 }
 
 async function createTableWithFallback(client, tableName, primarySql, fallbackSql) {
+  const savepoint = `sp_${tableName}`.replace(/[^a-zA-Z0-9_]/g, '_');
+  await client.query(`SAVEPOINT ${savepoint}`);
   try {
     await client.query(primarySql);
+    await client.query(`RELEASE SAVEPOINT ${savepoint}`);
   } catch (error) {
+    await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+    await client.query(`RELEASE SAVEPOINT ${savepoint}`);
     if (isForeignKeyError(error) && fallbackSql) {
       console.warn(
         `Falling back to reduced constraints for ${tableName} due to foreign key error: ${error.message}`
       );
       await client.query(fallbackSql);
+    } else if (error?.code === '42P07') {
+      // Table already exists with incompatible definition; ignore to keep bootstrap resilient.
+      console.warn(`Table ${tableName} already exists with a differing definition. Continuing.`);
     } else {
       throw error;
     }
