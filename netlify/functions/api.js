@@ -1,5 +1,18 @@
+/* eslint-env node */
 const { getStore } = require('@netlify/blobs');
 const crypto = require('crypto');
+const cookie = require('cookie');
+const {
+  ensureSchema,
+  getPool,
+  createUser,
+  findUserByUsername,
+  verifyPassword,
+  createSession,
+  getSession,
+  deleteSession,
+} = require('./db');
+const defaultMeasurementPositions = require('../../src/data/bodyMeasurementDefaults.json');
 
 const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 20000);
 const OPENAI_ANALYSIS_TIMEOUT_MS = Number(
@@ -124,6 +137,13 @@ const DEFAULT_SUGGESTION_LIMIT = 7;
 const OPENAI_SUGGESTION_MODEL = process.env.OPENAI_SUGGESTION_MODEL || 'gpt-4o-mini';
 const OPENAI_NUTRITION_MODEL =
   process.env.OPENAI_NUTRITION_MODEL || process.env.OPENAI_SUGGESTION_MODEL || 'gpt-4o-mini';
+
+const SESSION_COOKIE_NAME = 'nutri_scan_session';
+const SESSION_TTL_HOURS = Number(process.env.SESSION_TTL_HOURS || 48);
+
+function generateId(prefix) {
+  return `${prefix}_${crypto.randomUUID()}`;
+}
 
 const SUGGESTION_RESPONSE_SCHEMA = {
   name: 'ingredient_suggestions',
@@ -1081,16 +1101,293 @@ async function analyzeWithOpenAI({ imageDataUrl }) {
   return cacheAnalysis(cacheKey, ensureNumbers(parsed));
 }
 
-function jsonResponse(statusCode, body) {
+function jsonResponse(statusCode, body, options = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': '*',
+    ...options.headers
+  };
+
   return {
     statusCode,
-    headers: {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-store',
-      'Access-Control-Allow-Origin': '*'
-    },
+    headers,
     body: JSON.stringify(body)
   };
+}
+
+function serializeCookie(name, value, options = {}) {
+  return cookie.serialize(name, value, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    path: '/',
+    ...options
+  });
+}
+
+function createSessionCookie(token, expiresAt) {
+  return serializeCookie(SESSION_COOKIE_NAME, token, {
+    expires: expiresAt ? new Date(expiresAt) : new Date(Date.now() + SESSION_TTL_HOURS * 3600 * 1000)
+  });
+}
+
+function clearSessionCookie() {
+  return serializeCookie(SESSION_COOKIE_NAME, '', { expires: new Date(0) });
+}
+
+function parseCookies(event) {
+  const headerValue = event?.headers?.cookie || event?.headers?.Cookie || '';
+  if (!headerValue) {
+    return {};
+  }
+
+  try {
+    return cookie.parse(headerValue);
+  } catch (error) {
+    console.warn('Failed to parse cookies from request headers.', error);
+    return {};
+  }
+}
+
+async function getSessionUser(event) {
+  await ensureSchema();
+  const cookies = parseCookies(event);
+  const token = cookies[SESSION_COOKIE_NAME];
+  if (!token) {
+    return null;
+  }
+
+  try {
+    const session = await getSession(token);
+    if (!session) {
+      return null;
+    }
+
+    return {
+      id: session.user_id,
+      username: session.username,
+      role: session.role,
+      sessionToken: token,
+    };
+  } catch (error) {
+    console.error('Failed to load session from database.', error);
+    return null;
+  }
+}
+
+async function requireUser(event, { requireAdmin = false } = {}) {
+  const user = await getSessionUser(event);
+  if (!user) {
+    return { status: 'error', response: jsonResponse(401, { error: 'Authentication required.' }) };
+  }
+
+  if (requireAdmin && user.role !== 'admin') {
+    return { status: 'error', response: jsonResponse(403, { error: 'Admin access required.' }) };
+  }
+
+  return { status: 'success', user };
+}
+
+function parseJsonField(value, fallback) {
+  if (!value) {
+    return fallback;
+  }
+
+  if (typeof value === 'object') {
+    return value;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    console.warn('Failed to parse JSON field from database row.', error);
+    return fallback;
+  }
+}
+
+function normalizeMealRow(row) {
+  if (!row) {
+    return null;
+  }
+  const payload = parseJsonField(row.payload, {});
+  return {
+    ...payload,
+    id: row.id,
+    user_id: row.user_id,
+    created_date: payload.created_date || payload.createdAt || row.created_at,
+    updated_at: payload.updated_at || row.updated_at,
+  };
+}
+
+function normalizeDietPlanRow(row) {
+  if (!row) {
+    return null;
+  }
+  const payload = parseJsonField(row.payload, {});
+  return {
+    ...payload,
+    id: row.id,
+    user_id: row.user_id,
+    isActive: row.is_active,
+    created_at: payload.created_at || row.created_at,
+    updated_at: payload.updated_at || row.updated_at,
+  };
+}
+
+function normalizeMeasurementEntry(row) {
+  if (!row) {
+    return null;
+  }
+  const payload = parseJsonField(row.payload, {});
+  return {
+    ...payload,
+    id: row.id,
+    user_id: row.user_id,
+    recordedAt: payload.recordedAt || payload.recorded_at || row.recorded_at,
+  };
+}
+
+function normalizeMeasurementPositionsRow(row) {
+  if (!row) {
+    return null;
+  }
+  const payload = parseJsonField(row.payload, {});
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    kind: row.kind,
+    payload,
+    updated_at: row.updated_at,
+  };
+}
+
+function parsePathSegments(subPath) {
+  return subPath.split('/').filter(Boolean);
+}
+
+async function listMealsForUser(userId) {
+  const { rows } = await getPool().query(
+    'SELECT * FROM meals WHERE user_id = $1 ORDER BY created_at DESC',
+    [userId]
+  );
+  return rows.map(normalizeMealRow).filter(Boolean);
+}
+
+async function getMealForUser(userId, id) {
+  const { rows } = await getPool().query(
+    'SELECT * FROM meals WHERE user_id = $1 AND id = $2 LIMIT 1',
+    [userId, id]
+  );
+  return normalizeMealRow(rows[0]);
+}
+
+async function saveMealForUser(userId, meal) {
+  const id = meal.id || generateId('meal');
+  const payload = { ...meal, id, user_id: userId };
+  const createdAt = meal.created_date || meal.createdAt || new Date().toISOString();
+  await getPool().query(
+    `INSERT INTO meals (id, user_id, payload, created_at, updated_at)
+     VALUES ($1, $2, $3::jsonb, $4::timestamptz, NOW())
+     ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()`,
+    [id, userId, JSON.stringify({ ...payload, created_date: createdAt }), createdAt]
+  );
+  return getMealForUser(userId, id);
+}
+
+async function listDietPlansForUser(userId) {
+  const { rows } = await getPool().query(
+    'SELECT * FROM diet_plans WHERE user_id = $1 ORDER BY created_at DESC',
+    [userId]
+  );
+  return rows.map(normalizeDietPlanRow).filter(Boolean);
+}
+
+async function saveDietPlanForUser(userId, plan) {
+  const id = plan.id || generateId('diet_plan');
+  const createdAt = plan.created_at || plan.createdAt || new Date().toISOString();
+  const payload = { ...plan, id, user_id: userId, created_at: createdAt };
+  const isActive = Boolean(plan.isActive);
+  await getPool().query(
+    `INSERT INTO diet_plans (id, user_id, payload, is_active, created_at, updated_at)
+     VALUES ($1, $2, $3::jsonb, $4, $5::timestamptz, NOW())
+     ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, is_active = EXCLUDED.is_active, updated_at = NOW()`,
+    [id, userId, JSON.stringify(payload), isActive, createdAt]
+  );
+  if (isActive) {
+    await getPool().query(
+      'UPDATE diet_plans SET is_active = false WHERE user_id = $1 AND id <> $2',
+      [userId, id]
+    );
+  }
+  return getDietPlanForUser(userId, id);
+}
+
+async function getDietPlanForUser(userId, id) {
+  const { rows } = await getPool().query(
+    'SELECT * FROM diet_plans WHERE user_id = $1 AND id = $2 LIMIT 1',
+    [userId, id]
+  );
+  return normalizeDietPlanRow(rows[0]);
+}
+
+async function getActiveDietPlanForUser(userId) {
+  const { rows } = await getPool().query(
+    'SELECT * FROM diet_plans WHERE user_id = $1 AND is_active = true LIMIT 1',
+    [userId]
+  );
+  return normalizeDietPlanRow(rows[0]);
+}
+
+async function setActiveDietPlanForUser(userId, id) {
+  await getPool().query('UPDATE diet_plans SET is_active = false WHERE user_id = $1', [userId]);
+  await getPool().query('UPDATE diet_plans SET is_active = true WHERE user_id = $1 AND id = $2', [userId, id]);
+  return getDietPlanForUser(userId, id);
+}
+
+async function listMeasurementHistory(userId) {
+  const { rows } = await getPool().query(
+    'SELECT * FROM measurement_history WHERE user_id = $1 ORDER BY recorded_at DESC',
+    [userId]
+  );
+  return rows.map(normalizeMeasurementEntry).filter(Boolean);
+}
+
+async function addMeasurementHistory(userId, entry) {
+  const id = entry.id || generateId('measurement_history');
+  const recordedAt = entry.recordedAt || entry.recorded_at || new Date().toISOString();
+  const payload = { ...entry, id, user_id: userId, recordedAt };
+  await getPool().query(
+    `INSERT INTO measurement_history (id, user_id, payload, recorded_at)
+     VALUES ($1, $2, $3::jsonb, $4::timestamptz)
+     ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, recorded_at = EXCLUDED.recorded_at`,
+    [id, userId, JSON.stringify(payload), recordedAt]
+  );
+  return normalizeMeasurementEntry({ id, user_id: userId, payload, recorded_at: recordedAt });
+}
+
+async function deleteMeasurementHistory(userId) {
+  await getPool().query('DELETE FROM measurement_history WHERE user_id = $1', [userId]);
+}
+
+async function getMeasurementPositions(userId, kind) {
+  const { rows } = await getPool().query(
+    'SELECT * FROM measurement_positions WHERE user_id = $1 AND kind = $2 ORDER BY updated_at DESC LIMIT 1',
+    [userId, kind]
+  );
+  return normalizeMeasurementPositionsRow(rows[0]);
+}
+
+async function saveMeasurementPositions(userId, kind, payload) {
+  const existing = await getMeasurementPositions(userId, kind);
+  const id = existing?.id || generateId('measurement_position');
+  await getPool().query(
+    `INSERT INTO measurement_positions (id, user_id, kind, payload, created_at, updated_at)
+     VALUES ($1, $2, $3, $4::jsonb, NOW(), NOW())
+     ON CONFLICT (user_id, kind) DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()`,
+    [id, userId, kind, JSON.stringify(payload)]
+  );
+  return getMeasurementPositions(userId, kind);
 }
 
 function resolveSubPath(event) {
@@ -1108,17 +1405,335 @@ function resolveSubPath(event) {
 }
 
 exports.handler = async function handler(event) {
+  await ensureSchema();
   const subPath = resolveSubPath(event);
+  const segments = parsePathSegments(subPath);
+  const origin = event?.headers?.origin || event?.headers?.Origin || '*';
 
   if (event.httpMethod === 'OPTIONS') {
     return {
       statusCode: 204,
       headers: {
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin': origin,
         'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type'
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Credentials': 'true'
       }
     };
+  }
+
+  if (segments[0] === 'auth') {
+    if (segments[1] === 'register' && event.httpMethod === 'POST') {
+      try {
+        const payload = JSON.parse(event.body || '{}');
+        const username = typeof payload.username === 'string' ? payload.username.trim() : '';
+        const password = typeof payload.password === 'string' ? payload.password : '';
+
+        if (!username || !password) {
+          return jsonResponse(400, { error: 'username and password are required.' });
+        }
+
+        const existing = await findUserByUsername(username);
+        if (existing) {
+          return jsonResponse(409, { error: 'A user with this username already exists.' });
+        }
+
+        const user = await createUser({ username, password, role: 'user' });
+        await saveMeasurementPositions(user.id, 'default', defaultMeasurementPositions);
+        const session = await createSession(user.id, SESSION_TTL_HOURS);
+        const cookieHeader = createSessionCookie(session.token, session.expiresAt);
+
+        return jsonResponse(
+          201,
+          { user: { id: user.id, username: user.username, role: user.role } },
+          { headers: { 'Set-Cookie': cookieHeader, 'Access-Control-Allow-Credentials': 'true', 'Access-Control-Allow-Origin': origin } }
+        );
+      } catch (error) {
+        console.error('Failed to register user via Netlify function:', error);
+        return jsonResponse(500, { error: 'Failed to register user.' });
+      }
+    }
+
+    if (segments[1] === 'login' && event.httpMethod === 'POST') {
+      try {
+        const payload = JSON.parse(event.body || '{}');
+        const username = typeof payload.username === 'string' ? payload.username.trim() : '';
+        const password = typeof payload.password === 'string' ? payload.password : '';
+
+        if (!username || !password) {
+          return jsonResponse(400, { error: 'username and password are required.' });
+        }
+
+        const user = await findUserByUsername(username);
+        if (!user || !(await verifyPassword(user, password))) {
+          return jsonResponse(401, { error: 'Invalid username or password.' });
+        }
+
+        const session = await createSession(user.id, SESSION_TTL_HOURS);
+        const cookieHeader = createSessionCookie(session.token, session.expiresAt);
+        return jsonResponse(
+          200,
+          { user: { id: user.id, username: user.username, role: user.role } },
+          { headers: { 'Set-Cookie': cookieHeader, 'Access-Control-Allow-Credentials': 'true', 'Access-Control-Allow-Origin': origin } }
+        );
+      } catch (error) {
+        console.error('Failed to authenticate user via Netlify function:', error);
+        return jsonResponse(500, { error: 'Failed to sign in.' });
+      }
+    }
+
+    if (segments[1] === 'logout' && event.httpMethod === 'POST') {
+      try {
+        const user = await getSessionUser(event);
+        if (user?.sessionToken) {
+          await deleteSession(user.sessionToken);
+        }
+        return jsonResponse(
+          200,
+          { success: true },
+          { headers: { 'Set-Cookie': clearSessionCookie(), 'Access-Control-Allow-Credentials': 'true', 'Access-Control-Allow-Origin': origin } }
+        );
+      } catch (error) {
+        console.error('Failed to sign out user via Netlify function:', error);
+        return jsonResponse(500, { error: 'Failed to sign out.' });
+      }
+    }
+
+    if (segments[1] === 'session' && event.httpMethod === 'GET') {
+      const user = await getSessionUser(event);
+      if (!user) {
+        return jsonResponse(200, { user: null });
+      }
+      return jsonResponse(200, { user: { id: user.id, username: user.username, role: user.role } });
+    }
+  }
+
+  if (segments[0] === 'meals') {
+    if (event.httpMethod === 'GET' && segments.length === 1) {
+      const result = await requireUser(event);
+      if (result.status === 'error') {
+        return result.response;
+      }
+
+      const meals = await listMealsForUser(result.user.id);
+      return jsonResponse(200, { meals });
+    }
+
+    if (event.httpMethod === 'POST' && segments.length === 1) {
+      const result = await requireUser(event);
+      if (result.status === 'error') {
+        return result.response;
+      }
+
+      try {
+        const payload = JSON.parse(event.body || '{}');
+        if (!payload || typeof payload !== 'object') {
+          return jsonResponse(400, { error: 'A meal payload is required.' });
+        }
+
+        const normalized = await saveMealForUser(result.user.id, {
+          ...payload,
+          created_date: payload.created_date || payload.createdDate || new Date().toISOString(),
+        });
+        return jsonResponse(201, { meal: normalized });
+      } catch (error) {
+        console.error('Failed to create meal via Netlify function:', error);
+        return jsonResponse(500, { error: 'Failed to create meal.' });
+      }
+    }
+
+    if (segments.length === 2) {
+      const mealId = segments[1];
+      const result = await requireUser(event);
+      if (result.status === 'error') {
+        return result.response;
+      }
+
+      if (event.httpMethod === 'GET') {
+        const meal = await getMealForUser(result.user.id, mealId);
+        if (!meal) {
+          return jsonResponse(404, { error: 'Meal not found.' });
+        }
+        return jsonResponse(200, { meal });
+      }
+
+      if (event.httpMethod === 'PUT') {
+        try {
+          const payload = JSON.parse(event.body || '{}');
+          const existing = await getMealForUser(result.user.id, mealId);
+          if (!existing) {
+            return jsonResponse(404, { error: 'Meal not found.' });
+          }
+
+          const updated = await saveMealForUser(result.user.id, {
+            ...existing,
+            ...payload,
+            id: mealId,
+            created_date: existing.created_date,
+          });
+          return jsonResponse(200, { meal: updated });
+        } catch (error) {
+          console.error('Failed to update meal via Netlify function:', error);
+          return jsonResponse(500, { error: 'Failed to update meal.' });
+        }
+      }
+
+      if (event.httpMethod === 'DELETE') {
+        try {
+          await getPool().query('DELETE FROM meals WHERE user_id = $1 AND id = $2', [result.user.id, mealId]);
+          return jsonResponse(204, {});
+        } catch (error) {
+          console.error('Failed to delete meal via Netlify function:', error);
+          return jsonResponse(500, { error: 'Failed to delete meal.' });
+        }
+      }
+    }
+  }
+
+  if (segments[0] === 'diet-plans') {
+    const result = await requireUser(event);
+    if (result.status === 'error') {
+      return result.response;
+    }
+
+    if (event.httpMethod === 'GET' && segments.length === 1) {
+      const plans = await listDietPlansForUser(result.user.id);
+      return jsonResponse(200, { plans });
+    }
+
+    if (event.httpMethod === 'POST' && segments.length === 1) {
+      try {
+        const payload = JSON.parse(event.body || '{}');
+        const saved = await saveDietPlanForUser(result.user.id, payload);
+        return jsonResponse(201, { plan: saved });
+      } catch (error) {
+        console.error('Failed to create diet plan via Netlify function:', error);
+        return jsonResponse(500, { error: 'Failed to create diet plan.' });
+      }
+    }
+
+    if (segments.length === 2) {
+      const planId = segments[1];
+
+      if (event.httpMethod === 'GET') {
+        const plan = await getDietPlanForUser(result.user.id, planId);
+        if (!plan) {
+          return jsonResponse(404, { error: 'Diet plan not found.' });
+        }
+        return jsonResponse(200, { plan });
+      }
+
+      if (event.httpMethod === 'PUT') {
+        try {
+          const payload = JSON.parse(event.body || '{}');
+          const updated = await saveDietPlanForUser(result.user.id, { ...payload, id: planId });
+          return jsonResponse(200, { plan: updated });
+        } catch (error) {
+          console.error('Failed to update diet plan via Netlify function:', error);
+          return jsonResponse(500, { error: 'Failed to update diet plan.' });
+        }
+      }
+    }
+
+    if (segments.length === 3 && segments[2] === 'activate' && event.httpMethod === 'POST') {
+      const planId = segments[1];
+      try {
+        const plan = await setActiveDietPlanForUser(result.user.id, planId);
+        return jsonResponse(200, { plan });
+      } catch (error) {
+        console.error('Failed to set active diet plan via Netlify function:', error);
+        return jsonResponse(500, { error: 'Failed to set active diet plan.' });
+      }
+    }
+
+    if (segments.length === 2 && event.httpMethod === 'PATCH') {
+      const planId = segments[1];
+      try {
+        const payload = JSON.parse(event.body || '{}');
+        if (payload.activate) {
+          const plan = await setActiveDietPlanForUser(result.user.id, planId);
+          return jsonResponse(200, { plan });
+        }
+        const updated = await saveDietPlanForUser(result.user.id, { ...payload, id: planId });
+        return jsonResponse(200, { plan: updated });
+      } catch (error) {
+        console.error('Failed to patch diet plan via Netlify function:', error);
+        return jsonResponse(500, { error: 'Failed to update diet plan.' });
+      }
+    }
+  }
+
+  if (segments[0] === 'measurement-positions') {
+    const result = await requireUser(event);
+    if (result.status === 'error') {
+      return result.response;
+    }
+
+    const kind = segments[1] || 'default';
+
+    if (event.httpMethod === 'GET') {
+      const record = await getMeasurementPositions(result.user.id, kind);
+      if (!record) {
+        return jsonResponse(200, {
+          positions: kind === 'default' ? defaultMeasurementPositions : null,
+        });
+      }
+      return jsonResponse(200, { positions: record.payload });
+    }
+
+    if (event.httpMethod === 'PUT') {
+      try {
+        const payload = JSON.parse(event.body || '{}');
+        const record = await saveMeasurementPositions(result.user.id, kind, payload);
+        return jsonResponse(200, { positions: record.payload });
+      } catch (error) {
+        console.error('Failed to save measurement positions via Netlify function:', error);
+        return jsonResponse(500, { error: 'Failed to save measurement positions.' });
+      }
+    }
+  }
+
+  if (segments[0] === 'measurement-history') {
+    if (event.httpMethod === 'GET') {
+      const result = await requireUser(event);
+      if (result.status === 'error') {
+        return result.response;
+      }
+
+      const history = await listMeasurementHistory(result.user.id);
+      return jsonResponse(200, { history });
+    }
+
+    if (event.httpMethod === 'POST') {
+      const result = await requireUser(event);
+      if (result.status === 'error') {
+        return result.response;
+      }
+
+      try {
+        const payload = JSON.parse(event.body || '{}');
+        const entry = await addMeasurementHistory(result.user.id, payload);
+        return jsonResponse(201, { entry });
+      } catch (error) {
+        console.error('Failed to create measurement history entry via Netlify function:', error);
+        return jsonResponse(500, { error: 'Failed to save measurement entry.' });
+      }
+    }
+
+    if (event.httpMethod === 'DELETE') {
+      const result = await requireUser(event, { requireAdmin: true });
+      if (result.status === 'error') {
+        return result.response;
+      }
+
+      try {
+        await deleteMeasurementHistory(result.user.id);
+        return jsonResponse(204, {});
+      } catch (error) {
+        console.error('Failed to clear measurement history via Netlify function:', error);
+        return jsonResponse(500, { error: 'Failed to clear measurement history.' });
+      }
+    }
   }
 
   if (subPath === '/analyze' && event.httpMethod === 'POST') {

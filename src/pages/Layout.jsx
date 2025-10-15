@@ -1,9 +1,11 @@
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
+import PropTypes from 'prop-types';
 import { Link, useLocation } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Camera, BarChart3, History, Leaf, ClipboardList, Dumbbell, Ruler, Settings2, Brain } from "lucide-react";
 import { APP_DESCRIPTION, APP_NAME, APP_TAGLINE } from "@/constants/app";
+import { useAuth } from '@/context/AuthContext.jsx';
 import {
   Sidebar,
   SidebarContent,
@@ -18,51 +20,59 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 
-const navigationItems = [
-  {
-    title: "Dashboard",
-    url: createPageUrl("Dashboard"),
-    icon: BarChart3,
-  },
-  {
-    title: "Upload Meal",
-    url: createPageUrl("Upload"),
-    icon: Camera,
-  },
-  {
-    title: "Meal History",
-    url: createPageUrl("History"),
-    icon: History,
-  },
-  {
-    title: "Diet Plans",
-    url: createPageUrl("Diet Plans"),
-    icon: ClipboardList,
-  },
-  {
-    title: "Workout Planner",
-    url: createPageUrl("Workout Planner"),
-    icon: Dumbbell,
-  },
-  {
-    title: "Body Measurements",
-    url: createPageUrl("Body Measurements"),
-    icon: Ruler,
-  },
-  {
-    title: "Measurement Intelligence",
-    url: createPageUrl("Measurement Intelligence"),
-    icon: Brain,
-  },
-  {
-    title: "Body Measurements Admin",
-    url: createPageUrl("Body Measurements Admin"),
-    icon: Settings2,
-  },
-];
-
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
+  const { user, logout } = useAuth();
+
+  const navigationItems = useMemo(() => {
+    const items = [
+      {
+        title: "Dashboard",
+        url: createPageUrl("Dashboard"),
+        icon: BarChart3,
+      },
+      {
+        title: "Upload Meal",
+        url: createPageUrl("Upload"),
+        icon: Camera,
+      },
+      {
+        title: "Meal History",
+        url: createPageUrl("History"),
+        icon: History,
+      },
+      {
+        title: "Diet Plans",
+        url: createPageUrl("Diet Plans"),
+        icon: ClipboardList,
+      },
+      {
+        title: "Workout Planner",
+        url: createPageUrl("Workout Planner"),
+        icon: Dumbbell,
+      },
+      {
+        title: "Body Measurements",
+        url: createPageUrl("Body Measurements"),
+        icon: Ruler,
+      },
+      {
+        title: "Measurement Intelligence",
+        url: createPageUrl("Measurement Intelligence"),
+        icon: Brain,
+      },
+    ];
+
+    if (user?.role === 'admin') {
+      items.push({
+        title: "Body Measurements Admin",
+        url: createPageUrl("Body Measurements Admin"),
+        icon: Settings2,
+      });
+    }
+
+    return items;
+  }, [user]);
 
   useEffect(() => {
     const pageTitle = currentPageName ? `${APP_NAME} | ${currentPageName}` : APP_NAME;
@@ -133,9 +143,19 @@ export default function Layout({ children, currentPageName }) {
           </SidebarContent>
 
           <SidebarFooter className="border-t border-gray-100 p-6">
-            <div className="bg-gradient-to-r from-emerald-50 to-teal-50 p-4 rounded-xl border border-emerald-100">
-              <h3 className="font-semibold text-emerald-800 text-sm mb-1">Stay Healthy!</h3>
-              <p className="text-emerald-600 text-xs leading-relaxed">{APP_DESCRIPTION}</p>
+            <div className="space-y-3 rounded-xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-teal-50 p-4">
+              <div>
+                <h3 className="text-sm font-semibold text-emerald-900">{user?.username}</h3>
+                <p className="text-xs uppercase tracking-wide text-emerald-700/80">{user?.role ?? 'user'}</p>
+              </div>
+              <p className="text-xs text-emerald-700/80 leading-relaxed">{APP_DESCRIPTION}</p>
+              <button
+                type="button"
+                onClick={() => logout().catch((error) => console.error('Failed to sign out', error))}
+                className="w-full rounded-lg border border-emerald-200 bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-emerald-700 transition hover:bg-white"
+              >
+                Sign out
+              </button>
             </div>
           </SidebarFooter>
         </Sidebar>
@@ -156,3 +176,12 @@ export default function Layout({ children, currentPageName }) {
     </SidebarProvider>
   );
 }
+
+Layout.propTypes = {
+  children: PropTypes.node.isRequired,
+  currentPageName: PropTypes.string,
+};
+
+Layout.defaultProps = {
+  currentPageName: '',
+};

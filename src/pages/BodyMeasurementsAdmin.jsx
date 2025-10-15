@@ -16,17 +16,42 @@ function clamp(value, min, max) {
 }
 
 export default function BodyMeasurementsAdmin() {
-  const [positions, setPositions] = useState(() => {
-    const stored = loadMeasurementPositions();
-    return stored || getDefaultMeasurementPositions();
-  });
+  const [positions, setPositions] = useState(getDefaultMeasurementPositions);
   const [selectedFieldId, setSelectedFieldId] = useState(DEFAULT_MEASUREMENT_FIELDS[0].id);
   const [isDirty, setIsDirty] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [dragState, setDragState] = useState(null);
   const svgRef = useRef(null);
   const baseImage = useMemo(() => getSilhouetteAsset("front"), []);
-  const [hasCustomDefault, setHasCustomDefault] = useState(() => Boolean(loadDefaultMeasurementOverride()));
+  const [hasCustomDefault, setHasCustomDefault] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    loadMeasurementPositions()
+      .then((stored) => {
+        if (stored && isMounted) {
+          setPositions(stored);
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to load measurement positions for admin', error);
+      });
+
+    loadDefaultMeasurementOverride()
+      .then((override) => {
+        if (isMounted) {
+          setHasCustomDefault(Boolean(override));
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to load default measurement override', error);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const measurementFields = useMemo(
     () => mergeFieldsWithPositions(DEFAULT_MEASUREMENT_FIELDS, positions),
@@ -122,28 +147,45 @@ export default function BodyMeasurementsAdmin() {
     setDragState({ fieldId, target });
   };
 
-  const handleSave = () => {
-    saveMeasurementPositions(positions);
-    setIsDirty(false);
-    setStatusMessage("Measurement guides saved successfully.");
+  const handleSave = async () => {
+    try {
+      await saveMeasurementPositions(positions);
+      setIsDirty(false);
+      setStatusMessage("Measurement guides saved successfully.");
+    } catch (error) {
+      console.error("Failed to save measurement positions", error);
+      setStatusMessage("Unable to save the current layout. Please try again.");
+    }
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
     const defaults = getDefaultMeasurementPositions();
-    clearMeasurementPositions();
-    setPositions(defaults);
-    setIsDirty(false);
-    setStatusMessage(
-      hasCustomDefault ? "Guides reset to your saved default layout." : "Guides reset to default positions."
-    );
+    try {
+      await clearMeasurementPositions();
+      setPositions(defaults);
+      setIsDirty(false);
+      setStatusMessage(
+        hasCustomDefault ? "Guides reset to your saved default layout." : "Guides reset to default positions."
+      );
+    } catch (error) {
+      console.error("Failed to reset measurement positions", error);
+      setStatusMessage("We couldn't reset the layout. Please try again.");
+    }
   };
 
-  const handleSaveAsDefault = () => {
-    saveDefaultMeasurementPositions(positions);
-    saveMeasurementPositions(positions);
-    setHasCustomDefault(true);
-    setIsDirty(false);
-    setStatusMessage("Current layout saved as the new default for this device.");
+  const handleSaveAsDefault = async () => {
+    try {
+      await Promise.all([
+        saveDefaultMeasurementPositions(positions),
+        saveMeasurementPositions(positions)
+      ]);
+      setHasCustomDefault(true);
+      setIsDirty(false);
+      setStatusMessage("Current layout saved as the new default for this device.");
+    } catch (error) {
+      console.error("Failed to save default measurement positions", error);
+      setStatusMessage("Unable to save the default layout. Please try again.");
+    }
   };
 
   return (
