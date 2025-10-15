@@ -52,6 +52,15 @@ async function columnExists(client, tableName, columnName) {
   return rows.length > 0;
 }
 
+async function getColumnDataType(client, tableName, columnName) {
+  const { rows } = await client.query(
+    `SELECT data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2 LIMIT 1`,
+    [tableName, columnName]
+  );
+
+  return rows[0]?.data_type || null;
+}
+
 function isForeignKeyError(error) {
   if (!error) {
     return false;
@@ -151,6 +160,11 @@ function normalizeLegacyMeasurementPayload(raw) {
 
 async function ensureMeasurementHistoryPayload(client) {
   await client.query('ALTER TABLE measurement_history ADD COLUMN IF NOT EXISTS payload JSONB');
+
+  const idColumnType = await getColumnDataType(client, 'measurement_history', 'id');
+  if (idColumnType && idColumnType.toLowerCase() === 'uuid') {
+    await client.query('ALTER TABLE measurement_history ALTER COLUMN id TYPE TEXT USING id::text');
+  }
 
   const hasLegacyDataColumn = await columnExists(client, 'measurement_history', 'data');
 
