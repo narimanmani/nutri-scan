@@ -43,6 +43,15 @@ function loadJson(relativePath) {
   }
 }
 
+async function columnExists(client, tableName, columnName) {
+  const { rows } = await client.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2`,
+    [tableName, columnName]
+  );
+
+  return rows.length > 0;
+}
+
 function isForeignKeyError(error) {
   if (!error) {
     return false;
@@ -80,17 +89,13 @@ async function createTableWithFallback(client, tableName, primarySql, fallbackSq
 
 async function ensureColumn(client, tableName, columnName, columnDefinition, options = {}) {
   const { postAddStatements = [] } = options;
-  const { rows } = await client.query(
-    `SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`,
-    [tableName, columnName]
-  );
 
-  if (rows.length > 0) {
+  if (await columnExists(client, tableName, columnName)) {
     return false;
   }
 
   try {
-    await client.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
+    await client.query(`ALTER TABLE ${tableName} ADD COLUMN IF NOT EXISTS ${columnName} ${columnDefinition}`);
     for (const statement of postAddStatements) {
       await client.query(statement);
     }
@@ -113,6 +118,55 @@ async function ensureUniqueIndex(client, indexSql, identifier) {
       throw error;
     }
   }
+}
+
+function normalizeLegacyMeasurementPayload(raw) {
+  if (raw == null) {
+    return {};
+  }
+
+  if (Buffer.isBuffer?.(raw)) {
+    return normalizeLegacyMeasurementPayload(raw.toString('utf8'));
+  }
+
+  if (typeof raw === 'string') {
+    try {
+      return normalizeLegacyMeasurementPayload(JSON.parse(raw));
+    } catch (error) {
+      console.warn('Failed to parse legacy measurement payload string; preserving as text.');
+      return { legacy: raw };
+    }
+  }
+
+  if (Array.isArray(raw)) {
+    return { legacy: raw };
+  }
+
+  if (typeof raw === 'object') {
+    return raw;
+  }
+
+  return { legacy: raw };
+}
+
+async function ensureMeasurementHistoryPayload(client) {
+  await client.query('ALTER TABLE measurement_history ADD COLUMN IF NOT EXISTS payload JSONB');
+
+  const hasLegacyDataColumn = await columnExists(client, 'measurement_history', 'data');
+
+  if (hasLegacyDataColumn) {
+    const { rows } = await client.query('SELECT id, data FROM measurement_history WHERE payload IS NULL');
+
+    for (const row of rows) {
+      const normalized = normalizeLegacyMeasurementPayload(row.data);
+      await client.query('UPDATE measurement_history SET payload = $2 WHERE id = $1', [row.id, normalized]);
+    }
+  }
+
+  await client.query("UPDATE measurement_history SET payload = '{}'::jsonb WHERE payload IS NULL");
+  await client.query("ALTER TABLE measurement_history ALTER COLUMN payload SET DEFAULT '{}'::jsonb");
+  await client.query('ALTER TABLE measurement_history ALTER COLUMN payload SET NOT NULL');
+  await client.query('ALTER TABLE measurement_history ALTER COLUMN payload DROP DEFAULT');
 }
 
 async function ensureSchema() {
@@ -254,20 +308,7 @@ async function ensureSchema() {
       `
     );
 
-    await ensureColumn(
-      client,
-      'measurement_history',
-      'payload',
-      'JSONB',
-      {
-        postAddStatements: [
-          "UPDATE measurement_history SET payload = '{}'::jsonb WHERE payload IS NULL",
-          "ALTER TABLE measurement_history ALTER COLUMN payload SET DEFAULT '{}'::jsonb",
-          'ALTER TABLE measurement_history ALTER COLUMN payload SET NOT NULL',
-          'ALTER TABLE measurement_history ALTER COLUMN payload DROP DEFAULT',
-        ],
-      }
-    );
+    await ensureMeasurementHistoryPayload(client);
 
     await ensureUniqueIndex(
       client,
