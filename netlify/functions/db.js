@@ -78,6 +78,29 @@ async function createTableWithFallback(client, tableName, primarySql, fallbackSq
   }
 }
 
+async function ensureColumn(client, tableName, columnName, columnDefinition, options = {}) {
+  const { postAddStatements = [] } = options;
+  const { rows } = await client.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`,
+    [tableName, columnName]
+  );
+
+  if (rows.length > 0) {
+    return false;
+  }
+
+  try {
+    await client.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
+    for (const statement of postAddStatements) {
+      await client.query(statement);
+    }
+    return true;
+  } catch (error) {
+    console.error(`Failed to add column ${columnName} to ${tableName}:`, error);
+    return false;
+  }
+}
+
 async function ensureUniqueIndex(client, indexSql, identifier) {
   try {
     await client.query(indexSql);
@@ -229,6 +252,21 @@ async function ensureSchema() {
           recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `
+    );
+
+    await ensureColumn(
+      client,
+      'measurement_history',
+      'payload',
+      'JSONB',
+      {
+        postAddStatements: [
+          "UPDATE measurement_history SET payload = '{}'::jsonb WHERE payload IS NULL",
+          "ALTER TABLE measurement_history ALTER COLUMN payload SET DEFAULT '{}'::jsonb",
+          'ALTER TABLE measurement_history ALTER COLUMN payload SET NOT NULL',
+          'ALTER TABLE measurement_history ALTER COLUMN payload DROP DEFAULT',
+        ],
+      }
     );
 
     await ensureUniqueIndex(
