@@ -183,6 +183,50 @@ async function ensureMeasurementHistoryPayload(client) {
   await client.query('ALTER TABLE measurement_history ALTER COLUMN payload DROP DEFAULT');
 }
 
+async function ensureUserPasswordHashes(client) {
+  const hasPasswordHashColumn = await columnExists(client, 'users', 'password_hash');
+  if (!hasPasswordHashColumn) {
+    await client.query('ALTER TABLE users ADD COLUMN password_hash TEXT');
+  }
+
+  const hasLegacyPasswordColumn = await columnExists(client, 'users', 'password');
+  if (hasLegacyPasswordColumn) {
+    const { rows: legacyUsers } = await client.query(
+      'SELECT id, username, password, password_hash FROM users WHERE password IS NOT NULL'
+    );
+
+    for (const user of legacyUsers) {
+      const legacyPassword = typeof user.password === 'string' ? user.password.trim() : '';
+      if (!legacyPassword) {
+        continue;
+      }
+
+      if (typeof user.password_hash === 'string' && user.password_hash.length > 0) {
+        continue;
+      }
+
+      try {
+        const hashed = await bcrypt.hash(legacyPassword, 10);
+        await client.query('UPDATE users SET password_hash = $2 WHERE id = $1', [user.id, hashed]);
+      } catch (error) {
+        console.error(`Failed to migrate password for user ${user.username}:`, error);
+      }
+    }
+
+    try {
+      await client.query('ALTER TABLE users DROP COLUMN password');
+    } catch (error) {
+      console.warn('Unable to drop legacy users.password column:', error.message);
+    }
+  }
+
+  try {
+    await client.query('ALTER TABLE users ALTER COLUMN password_hash SET NOT NULL');
+  } catch (error) {
+    console.warn('Unable to enforce NOT NULL on users.password_hash:', error.message);
+  }
+}
+
 async function ensureSchema() {
   if (schemaReady || !CONNECTION_URL) {
     return;
@@ -202,6 +246,8 @@ async function ensureSchema() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+
+    await ensureUserPasswordHashes(client);
 
     await createTableWithFallback(
       client,
@@ -450,7 +496,19 @@ async function verifyPassword(user, password) {
   if (!user || !password) {
     return false;
   }
-  return bcrypt.compare(password, user.password_hash);
+  const hash = typeof user.password_hash === 'string' ? user.password_hash : '';
+
+  if (!hash) {
+    console.warn(`User ${user?.username || user?.id || '<unknown>'} is missing a password hash.`);
+    return false;
+  }
+
+  try {
+    return await bcrypt.compare(password, hash);
+  } catch (error) {
+    console.error('Failed to verify password hash for user:', error);
+    return false;
+  }
 }
 
 function hashToken(token) {
