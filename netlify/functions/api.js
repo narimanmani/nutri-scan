@@ -8,6 +8,19 @@ try {
 }
 const crypto = require('crypto');
 
+function randomUUID() {
+  if (typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  const bytes = crypto.randomBytes(16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 const {
   ensureSchema,
   seedInitialData,
@@ -153,7 +166,7 @@ function canonicalizeUnit(unit) {
   return UNIT_ALIASES[normalized] || (CANONICAL_UNITS.includes(normalized) ? normalized : 'g');
 }
 
-function normalizeIngredient(ingredient, index = 0) {
+function normalizeMealIngredient(ingredient, index = 0) {
   const safe = ingredient && typeof ingredient === 'object' ? { ...ingredient } : {};
   const normalized = {
     id:
@@ -188,7 +201,7 @@ function normalizeMealPayload(raw, { id: forcedId, createdDate: forcedCreatedDat
     ? forcedId
     : typeof sanitized.id === 'string' && sanitized.id.trim().length > 0
       ? sanitized.id.trim()
-      : `meal_${crypto.randomUUID()}`;
+      : `meal_${randomUUID()}`;
 
   sanitized.id = id;
 
@@ -220,12 +233,12 @@ function normalizeMealPayload(raw, { id: forcedId, createdDate: forcedCreatedDat
   }
 
   const ingredients = Array.isArray(sanitized.ingredients)
-    ? sanitized.ingredients.map((ingredient, index) => normalizeIngredient(ingredient, index)).filter(Boolean)
+    ? sanitized.ingredients.map((ingredient, index) => normalizeMealIngredient(ingredient, index)).filter(Boolean)
     : [];
 
   if (ingredients.length === 0) {
     ingredients.push(
-      normalizeIngredient(
+      normalizeMealIngredient(
         {
           id: 'ingredient_1',
           name: sanitized.meal_name || 'Meal serving',
@@ -410,24 +423,6 @@ const INGREDIENT_ESTIMATE_SCHEMA = {
   }
 };
 
-function canonicalizeUnit(unit) {
-  if (typeof unit !== 'string') {
-    return 'g';
-  }
-
-  const normalized = unit.trim().toLowerCase();
-  if (normalized.length === 0) {
-    return 'g';
-  }
-
-  const mapped = UNIT_ALIASES[normalized];
-  if (mapped) {
-    return mapped;
-  }
-
-  return CANONICAL_UNITS.includes(normalized) ? normalized : 'g';
-}
-
 const FALLBACK_INGREDIENTS = [
   {
     id: 'fallback-chicken-breast',
@@ -551,7 +546,7 @@ const MOCK_RESPONSE = {
   ]
 };
 
-function normalizeIngredient(ingredient, index = 0) {
+function normalizeSuggestionIngredient(ingredient, index = 0) {
   const safe = typeof ingredient === 'object' && ingredient !== null ? { ...ingredient } : {};
   const normalized = {
     id: typeof safe.id === 'string' && safe.id.length > 0 ? safe.id : `ingredient_${Date.now()}_${index}`,
@@ -587,11 +582,11 @@ function ensureNumbers(payload) {
   const result = { ...payload };
 
   const normalizedIngredients = Array.isArray(result.ingredients)
-    ? result.ingredients.map((ingredient, index) => normalizeIngredient(ingredient, index))
+    ? result.ingredients.map((ingredient, index) => normalizeSuggestionIngredient(ingredient, index))
     : [];
 
   if (normalizedIngredients.length === 0) {
-    normalizedIngredients.push(normalizeIngredient({
+    normalizedIngredients.push(normalizeSuggestionIngredient({
       name: result.meal_name || 'Meal serving',
       unit: 'serving',
       amount: 1,
@@ -1435,7 +1430,7 @@ async function handleRequest(event) {
     }
 
     const passwordHash = await hashPassword(password);
-    const userId = crypto.randomUUID();
+    const userId = randomUUID();
     const { rows } = await query(
       'INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, username, role',
       [userId, username, passwordHash, 'user']
@@ -1560,7 +1555,7 @@ async function handleRequest(event) {
         return jsonResponse(400, { error: 'Meal payload is required.' }, event);
       }
 
-      const mealId = `meal_${crypto.randomUUID()}`;
+      const mealId = `meal_${randomUUID()}`;
       const normalized = normalizeMealPayload(payload, {
         id: mealId,
         createdDate: payload.created_date || payload.meal_date
@@ -1678,7 +1673,7 @@ async function handleRequest(event) {
         return jsonResponse(400, { error: 'Diet plan payload is required.' }, event);
       }
 
-      const planId = `diet_plan_${crypto.randomUUID()}`;
+      const planId = `diet_plan_${randomUUID()}`;
       const now = new Date();
       const nowIso = now.toISOString();
       const isActive = Boolean(payload.isActive);
@@ -1884,7 +1879,7 @@ async function handleRequest(event) {
         return jsonResponse(400, { error: 'Measurement entry is required.' }, event);
       }
 
-      const id = entry.id && typeof entry.id === 'string' ? entry.id : `measurement_${crypto.randomUUID()}`;
+      const id = entry.id && typeof entry.id === 'string' ? entry.id : `measurement_${randomUUID()}`;
       const recordedAt = entry.recordedAt || new Date().toISOString();
       entry.id = id;
       entry.recordedAt = recordedAt;
@@ -1893,7 +1888,7 @@ async function handleRequest(event) {
 
       await query(
         'INSERT INTO measurement_history (id, user_id, entry, recorded_at) VALUES ($1, $2, $3, $4)',
-        [crypto.randomUUID(), user.id, entry, timestamp]
+        [randomUUID(), user.id, entry, timestamp]
       );
 
       return jsonResponse(201, { data: entry }, event);

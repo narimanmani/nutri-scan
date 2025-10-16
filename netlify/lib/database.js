@@ -3,6 +3,19 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
+function randomUUID() {
+  if (typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  const bytes = crypto.randomBytes(16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 let mealsSeed = [];
 let dietPlansSeed = [];
 let measurementHistorySeed = [];
@@ -455,7 +468,7 @@ function hashToken(token) {
 }
 
 function generateId() {
-  return crypto.randomUUID();
+  return randomUUID();
 }
 
 async function createSession(userId, ttlHours = 24 * 7) {
@@ -517,7 +530,7 @@ async function ensureDietPlanSeed(userId) {
   }
 
   for (const [index, plan] of dietPlansSeed.entries()) {
-    const planId = plan.id || `diet_plan_${crypto.randomUUID()}`;
+    const planId = plan.id || `diet_plan_${randomUUID()}`;
     const { rows } = await query('SELECT id FROM diet_plans WHERE id = $1', [planId]);
     if (rows.length > 0) {
       continue;
@@ -544,7 +557,7 @@ async function ensureMealSeed(userId) {
   }
 
   for (const meal of mealsSeed) {
-    const mealId = meal.id || `meal_${crypto.randomUUID()}`;
+    const mealId = meal.id || `meal_${randomUUID()}`;
     const { rows } = await query('SELECT id FROM meals WHERE id = $1', [mealId]);
     if (rows.length > 0) {
       continue;
@@ -574,11 +587,11 @@ function normalizeMeasurementEntry(raw) {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   if (typeof entry.id === 'string' && !uuidRegex.test(entry.id)) {
     entry.legacyId = entry.id;
-    entry.id = crypto.randomUUID();
+    entry.id = randomUUID();
   }
 
   if (typeof entry.id !== 'string' || !uuidRegex.test(entry.id)) {
-    entry.id = crypto.randomUUID();
+    entry.id = randomUUID();
   }
 
   entry.recordedAt = entry.recordedAt || new Date().toISOString();
