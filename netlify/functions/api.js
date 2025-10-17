@@ -1979,11 +1979,13 @@ async function handleRequest(event) {
   return jsonResponse(404, { error: 'Not found.' });
 }
 
-exports.handler = async function handler(event) {
+async function handler(event) {
   try {
     return await handleRequest(event);
   } catch (error) {
     console.error('Unhandled API error:', error);
     return jsonResponse(500, { error: 'Internal server error.' }, event);
   }
-};
+}
+
+module.exports = { handler };
