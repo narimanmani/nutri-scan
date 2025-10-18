@@ -199,6 +199,81 @@ async function ensureSchema() {
     ON users ((lower(username)));
   `);
 
+  const hasPasswordHashColumn = await columnExists('users', 'password_hash');
+  if (!hasPasswordHashColumn) {
+    await query('ALTER TABLE users ADD COLUMN password_hash text;');
+  }
+
+  const hasRoleColumn = await columnExists('users', 'role');
+  if (!hasRoleColumn) {
+    await query("ALTER TABLE users ADD COLUMN role text DEFAULT 'user';");
+  }
+
+  const hasCreatedAtColumn = await columnExists('users', 'created_at');
+  if (!hasCreatedAtColumn) {
+    await query("ALTER TABLE users ADD COLUMN created_at timestamptz DEFAULT now();");
+  }
+
+  await query('UPDATE users SET username = lower(username) WHERE username IS NOT NULL;');
+
+  const hasLegacyPasswordColumn = await columnExists('users', 'password');
+  if (hasLegacyPasswordColumn) {
+    const { rows: legacyPasswords } = await query(
+      "SELECT id, password FROM users WHERE password IS NOT NULL AND password <> ''"
+    );
+
+    for (const row of legacyPasswords) {
+      const { id, password } = row;
+      if (typeof password !== 'string' || password.length === 0) {
+        continue;
+      }
+
+      let nextHash = password;
+      if (!isBcryptHash(nextHash) && !nextHash.startsWith(`${PASSWORD_PREFIX}$`)) {
+        nextHash = await hashPassword(password);
+      }
+
+      await query('UPDATE users SET password_hash = $1 WHERE id = $2', [nextHash, id]);
+    }
+  }
+
+  const { rows: missingHashes } = await query(
+    "SELECT id, lower(username) AS username FROM users WHERE password_hash IS NULL OR password_hash = ''"
+  );
+
+  for (const row of missingHashes) {
+    const { id, username } = row;
+    let password = 'sampleUser234!@';
+    if (username === 'admin') {
+      password = 'sampleAdmin234!@';
+    }
+
+    const passwordHash = await hashPassword(password);
+    await query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, id]);
+  }
+
+  await query("UPDATE users SET role = 'admin' WHERE lower(username) = 'admin'");
+  await query(
+    "UPDATE users SET role = 'user' WHERE role IS NULL OR role NOT IN ('user','admin')"
+  );
+
+  await query('UPDATE users SET created_at = now() WHERE created_at IS NULL;');
+  await query("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'user';");
+  await query("ALTER TABLE users ALTER COLUMN created_at SET DEFAULT now();");
+
+  await query(`
+    DO $$
+    BEGIN
+      ALTER TABLE users
+        ADD CONSTRAINT users_role_check CHECK (role IN ('user', 'admin'));
+    EXCEPTION
+      WHEN duplicate_object THEN NULL;
+    END;
+    $$;
+  `);
+
+  await query('ALTER TABLE users DROP COLUMN IF EXISTS password;');
+
   await query(`
     CREATE TABLE IF NOT EXISTS sessions (
       id uuid PRIMARY KEY,
