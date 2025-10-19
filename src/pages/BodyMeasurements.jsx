@@ -9,6 +9,7 @@ import {
 } from "@/utils/bodyMeasurementLayout.js";
 import { saveMeasurementEntry } from "@/utils/measurementHistory.js";
 import { createPageUrl } from "@/utils";
+import { useAuth } from "@/context/AuthContext.jsx";
 
 function createInitialValues(fields) {
   return fields.reduce((acc, field) => {
@@ -42,6 +43,7 @@ function formatNumber(value, digits = 1) {
 }
 
 export default function BodyMeasurements() {
+  const { user } = useAuth();
   const [activeField, setActiveField] = useState(null);
   const [values, setValues] = useState(() => createInitialValues(DEFAULT_MEASUREMENT_FIELDS));
   const [unit, setUnit] = useState("cm");
@@ -145,6 +147,7 @@ export default function BodyMeasurements() {
       label: "User Measurement",
       source: "User",
       recordedAt: new Date().toISOString(),
+      userId: user?.id || null,
       profile: {
         gender,
         age: ageValue,
@@ -158,7 +161,15 @@ export default function BodyMeasurements() {
       weightUnit: "kg",
     };
 
-    saveMeasurementEntry(entry);
+    if (!user?.id) {
+      setStatus({
+        type: "error",
+        message: "You must be signed in to save measurements.",
+      });
+      return;
+    }
+
+    saveMeasurementEntry(entry, user.id);
     setStatus({
       type: "success",
       message: `Measurements saved! Height ${formatNumber(convertedHeight)} cm, weight ${formatNumber(

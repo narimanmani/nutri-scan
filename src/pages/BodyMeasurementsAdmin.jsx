@@ -10,12 +10,15 @@ import {
   saveDefaultMeasurementPositions,
   saveMeasurementPositions,
 } from "@/utils/bodyMeasurementLayout.js";
+import { useAuth } from "@/context/AuthContext.jsx";
+import { User } from "@/api/entities";
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
 export default function BodyMeasurementsAdmin() {
+  const { user } = useAuth();
   const [positions, setPositions] = useState(() => {
     const stored = loadMeasurementPositions();
     return stored || getDefaultMeasurementPositions();
@@ -27,6 +30,8 @@ export default function BodyMeasurementsAdmin() {
   const svgRef = useRef(null);
   const baseImage = useMemo(() => getSilhouetteAsset("front"), []);
   const [hasCustomDefault, setHasCustomDefault] = useState(() => Boolean(loadDefaultMeasurementOverride()));
+  const [registeredUsers, setRegisteredUsers] = useState([]);
+  const [userError, setUserError] = useState("");
 
   const measurementFields = useMemo(
     () => mergeFieldsWithPositions(DEFAULT_MEASUREMENT_FIELDS, positions),
@@ -122,6 +127,48 @@ export default function BodyMeasurementsAdmin() {
     setDragState({ fieldId, target });
   };
 
+  useEffect(() => {
+    if (user?.role !== "admin") {
+      setRegisteredUsers([]);
+      return;
+    }
+
+    let isActive = true;
+
+    User.list()
+      .then((accounts) => {
+        if (!isActive || !Array.isArray(accounts)) {
+          return;
+        }
+        setRegisteredUsers(accounts);
+        setUserError("");
+      })
+      .catch((error) => {
+        if (!isActive) {
+          return;
+        }
+        setRegisteredUsers([]);
+        setUserError(error?.message || "Unable to load registered users.");
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [user?.role]);
+
+  if (!user || user.role !== "admin") {
+    return (
+      <div className="mx-auto max-w-3xl space-y-6 px-4 py-10">
+        <div className="rounded-3xl border border-emerald-200 bg-white/80 p-6 shadow-lg shadow-emerald-100/60">
+          <h1 className="text-2xl font-semibold text-emerald-900">Administrator access required</h1>
+          <p className="mt-3 text-sm text-emerald-800/80">
+            The body measurement layout editor is restricted to administrator accounts. Sign in with an admin user to adjust the measurement guide positions for all members.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const handleSave = () => {
     saveMeasurementPositions(positions);
     setIsDirty(false);
@@ -185,6 +232,30 @@ export default function BodyMeasurementsAdmin() {
                 </button>
               );
             })}
+          </div>
+
+          <div className="rounded-2xl border border-emerald-100 bg-white/90 p-4 text-sm text-emerald-800/80">
+            <h3 className="text-xs font-semibold uppercase tracking-widest text-emerald-500">Registered users</h3>
+            {userError ? (
+              <p className="mt-2 text-xs text-red-600">{userError}</p>
+            ) : registeredUsers.length === 0 ? (
+              <p className="mt-2 text-xs">No users found.</p>
+            ) : (
+              <ul className="mt-2 space-y-2">
+                {registeredUsers.map((account) => (
+                  <li
+                    key={account.username}
+                    className="flex items-center justify-between rounded-xl border border-emerald-100/60 bg-emerald-50/60 px-3 py-2"
+                  >
+                    <div>
+                      <p className="text-sm font-semibold text-emerald-900">{account.displayName}</p>
+                      <p className="text-xs text-emerald-700/70">{account.username}</p>
+                    </div>
+                    <span className="text-xs uppercase tracking-wide text-emerald-600">{account.role}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
 
           <div className="rounded-2xl border border-emerald-100 bg-white/90 p-4 text-sm text-emerald-800/80">
