@@ -151,7 +151,7 @@ async function ensureJsonbColumn(tableName, columnName, keyColumn, { enforceNotN
       }
 
       await query(
-        `UPDATE ${tableName} SET ${tempColumn} = $1 WHERE ${keyColumn} = $2`,
+        `UPDATE ${tableName} SET ${tempColumn} = $1 WHERE ${keyColumn} IS NOT DISTINCT FROM $2`,
         [parsed, key]
       );
     }
@@ -380,7 +380,32 @@ async function ensureSchema() {
     );
   `);
 
+  const hasMeasurementLayoutUserId = await columnExists('measurement_layouts', 'user_id');
+  if (!hasMeasurementLayoutUserId) {
+    await query('ALTER TABLE measurement_layouts ADD COLUMN user_id uuid;');
+  }
+
+  const hasMeasurementLayoutPositions = await columnExists('measurement_layouts', 'positions');
+  if (!hasMeasurementLayoutPositions) {
+    await query("ALTER TABLE measurement_layouts ADD COLUMN positions jsonb DEFAULT '{}'::jsonb;");
+  }
+
+  const hasMeasurementLayoutUpdatedAt = await columnExists('measurement_layouts', 'updated_at');
+  if (!hasMeasurementLayoutUpdatedAt) {
+    await query("ALTER TABLE measurement_layouts ADD COLUMN updated_at timestamptz DEFAULT now();");
+  }
+
+  await query('UPDATE measurement_layouts SET updated_at = now() WHERE updated_at IS NULL;');
+
   await ensureJsonbColumn('measurement_layouts', 'positions', 'user_id');
+
+  await query('ALTER TABLE measurement_layouts DROP COLUMN IF EXISTS id;');
+
+  await ensureForeignKey(
+    'measurement_layouts',
+    'measurement_layouts_user_id_fkey',
+    'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE'
+  );
 
   await query(`
     CREATE TABLE IF NOT EXISTS measurement_history (
@@ -728,6 +753,32 @@ async function seedInitialData() {
   await query('UPDATE meals SET user_id = $1 WHERE user_id IS NULL', [sampleUser.id]);
   await query('UPDATE diet_plans SET user_id = $1 WHERE user_id IS NULL', [sampleUser.id]);
   await query('UPDATE measurement_layouts SET user_id = $1 WHERE user_id IS NULL', [sampleUser.id]);
+
+  await query(`
+    DELETE FROM measurement_layouts ml
+    USING measurement_layouts dup
+    WHERE ml.ctid < dup.ctid
+      AND ml.user_id IS NOT DISTINCT FROM dup.user_id;
+  `);
+
+  const { rows: layoutNulls } = await query(
+    'SELECT 1 FROM measurement_layouts WHERE user_id IS NULL LIMIT 1'
+  );
+
+  if (layoutNulls.length === 0) {
+    await query('ALTER TABLE measurement_layouts ALTER COLUMN user_id SET NOT NULL');
+    await query(`
+      DO $$
+      BEGIN
+        ALTER TABLE measurement_layouts
+          ADD CONSTRAINT measurement_layouts_pkey PRIMARY KEY (user_id);
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END;
+      $$;
+    `);
+  }
+
   await query('UPDATE measurement_history SET user_id = $1 WHERE user_id IS NULL', [sampleUser.id]);
 }
 
