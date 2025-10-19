@@ -471,15 +471,17 @@ async function ensureSchema() {
 // function` errors when the database module ships without the legacy names. We provide a generous
 // range of aliases so future bootstrap iterations continue to work even if a deployment lags
 // behind several versions.
-const legacyEnsureSchemaAliases = {};
+const ensureSchemaAliasVersions = Array.from({ length: 60 }, (_, index) => index + 2);
 
-// Cover a generous range of legacy helpers (2-25) to future-proof cached bundles that
-// reference incremented `ensureSchemaN` exports. Each alias references the canonical
-// `ensureSchema` implementation so older deployments pick up the latest bootstrap logic
-// without needing bespoke wrappers per version.
-for (let version = 2; version <= 25; version += 1) {
-  legacyEnsureSchemaAliases[`ensureSchema${version}`] = ensureSchema;
-}
+const ensureSchemaAliasFactories = ensureSchemaAliasVersions.reduce((aliases, version) => {
+  const aliasName = `ensureSchema${version}`;
+  // Use a dedicated wrapper function for each alias instead of reusing the same function
+  // reference. Some bundlers snapshot the function source when the alias is first required,
+  // so an explicit wrapper guarantees a callable export even when older bundles reference
+  // incrementing helper names.
+  aliases[aliasName] = async (...args) => ensureSchema(...args);
+  return aliases;
+}, {});
 
 async function getUserByUsername(username) {
   if (!username) return null;
@@ -809,11 +811,16 @@ const exported = {
   createSession,
   getSession,
   deleteSession,
-  ensureMeasurementDefaults
+  ensureMeasurementDefaults,
+  ...ensureSchemaAliasFactories
 };
 
-for (const [alias, fn] of Object.entries(legacyEnsureSchemaAliases)) {
-  exported[alias] = fn;
-}
-
 module.exports = exported;
+
+// Ensure CommonJS' `exports` helper (used by some bundlers) reflects the alias map too. We assign
+// the properties after `module.exports` is set so both `module.exports.ensureSchemaN` and
+// `exports.ensureSchemaN` resolve to callable wrappers.
+for (const [aliasName, fn] of Object.entries(ensureSchemaAliasFactories)) {
+  module.exports[aliasName] = fn;
+  exports[aliasName] = fn; // eslint-disable-line no-undef
+}
