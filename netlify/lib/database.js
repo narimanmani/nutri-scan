@@ -473,10 +473,12 @@ async function ensureSchema() {
 // behind several versions.
 const legacyEnsureSchemaAliases = {};
 
-for (const version of [2, 3, 4, 5, 6, 7, 8, 9, 10]) {
-  legacyEnsureSchemaAliases[`ensureSchema${version}`] = async function ensureSchemaAlias() {
-    return ensureSchema();
-  };
+// Cover a generous range of legacy helpers (2-25) to future-proof cached bundles that
+// reference incremented `ensureSchemaN` exports. Each alias references the canonical
+// `ensureSchema` implementation so older deployments pick up the latest bootstrap logic
+// without needing bespoke wrappers per version.
+for (let version = 2; version <= 25; version += 1) {
+  legacyEnsureSchemaAliases[`ensureSchema${version}`] = ensureSchema;
 }
 
 async function getUserByUsername(username) {
@@ -796,9 +798,8 @@ async function seedInitialData() {
   await query('UPDATE measurement_history SET user_id = $1 WHERE user_id IS NULL', [sampleUser.id]);
 }
 
-module.exports = {
+const exported = {
   ensureSchema,
-  ...legacyEnsureSchemaAliases,
   seedInitialData,
   query,
   getUserByUsername,
@@ -810,3 +811,9 @@ module.exports = {
   deleteSession,
   ensureMeasurementDefaults
 };
+
+for (const [alias, fn] of Object.entries(legacyEnsureSchemaAliases)) {
+  exported[alias] = fn;
+}
+
+module.exports = exported;
