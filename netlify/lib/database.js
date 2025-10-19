@@ -474,17 +474,15 @@ async function ensureSchema() {
 // `module.exports` immediately receive callable functions.
 const ensureSchemaAliasVersions = Array.from({ length: 100 }, (_, index) => index + 2);
 
-function attachEnsureSchemaAliases(target) {
-  if (!target || typeof target !== 'object') {
-    return target;
-  }
+function buildEnsureSchemaAliasMap() {
+  const aliases = {};
 
   for (const version of ensureSchemaAliasVersions) {
     const key = `ensureSchema${version}`;
-    target[key] = ensureSchema;
+    aliases[key] = () => ensureSchema();
   }
 
-  return target;
+  return aliases;
 }
 
 async function getUserByUsername(username) {
@@ -804,20 +802,23 @@ async function seedInitialData() {
   await query('UPDATE measurement_history SET user_id = $1 WHERE user_id IS NULL', [sampleUser.id]);
 }
 
-const exported = exports;
+const ensureSchemaAliases = buildEnsureSchemaAliasMap();
 
-exported.ensureSchema = ensureSchema;
-exported.seedInitialData = seedInitialData;
-exported.query = query;
-exported.getUserByUsername = getUserByUsername;
-exported.getUserById = getUserById;
-exported.hashPassword = hashPassword;
-exported.verifyPassword = verifyPassword;
-exported.createSession = createSession;
-exported.getSession = getSession;
-exported.deleteSession = deleteSession;
-exported.ensureMeasurementDefaults = ensureMeasurementDefaults;
+const exported = {
+  ensureSchema,
+  seedInitialData,
+  query,
+  getUserByUsername,
+  getUserById,
+  hashPassword,
+  verifyPassword,
+  createSession,
+  getSession,
+  deleteSession,
+  ensureMeasurementDefaults,
+  ...ensureSchemaAliases
+};
 
-attachEnsureSchemaAliases(exported);
+Object.assign(exports, exported);
 
 module.exports = exported;
