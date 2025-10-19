@@ -822,12 +822,24 @@ const exported = {
   createSession,
   getSession,
   deleteSession,
-  ensureMeasurementDefaults,
-  ...ensureSchemaAliases
+  ensureMeasurementDefaults
 };
+
+for (const [name, alias] of Object.entries(ensureSchemaAliases)) {
+  exported[name] = alias;
+}
+
+// Populate the existing `exports` object before we replace `module.exports`. Some bundlers capture
+// the original reference synchronously, so eagerly assigning the aliases ensures they are callable
+// regardless of when the snapshot occurs.
+for (const [name, value] of Object.entries(exported)) {
+  // eslint-disable-next-line no-undef
+  exports[name] = value;
+}
 
 module.exports = exported;
 
 // Align the CommonJS helpers so `exports` continues to mirror `module.exports` for bundlers that
 // capture either reference.
-Object.assign(exports, module.exports); // eslint-disable-line no-undef
+// eslint-disable-next-line no-undef
+Object.assign(exports, module.exports);
