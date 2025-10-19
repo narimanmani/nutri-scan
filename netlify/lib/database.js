@@ -470,11 +470,13 @@ async function ensureSchema() {
 // handler, so exporting stable aliases prevents runtime `TypeError: ensureSchemaX is not a
 // function` errors when the database module ships without the legacy names. We provide a generous
 // range of aliases so future bootstrap iterations continue to work even if a deployment lags
-// behind several versions. The aliases are generated eagerly and attached after `module.exports`
-// is assigned so every consumer (CommonJS or bundled) receives callable functions.
+// behind several versions. The aliases are generated eagerly so bundlers that snapshot
+// `module.exports` immediately receive callable functions.
 const ensureSchemaAliasVersions = Array.from({ length: 100 }, (_, index) => index + 2);
 
-function createEnsureSchemaAlias(version) {
+const ensureSchemaAliases = {};
+
+for (const version of ensureSchemaAliasVersions) {
   const alias = async function ensureSchemaAlias(...args) {
     return ensureSchema(...args);
   };
@@ -489,28 +491,7 @@ function createEnsureSchemaAlias(version) {
     // callable alias is still usable.
   }
 
-  return alias;
-}
-
-function attachEnsureSchemaAliases(target) {
-  if (!target || typeof target !== 'object') {
-    return;
-  }
-
-  for (const version of ensureSchemaAliasVersions) {
-    const aliasName = `ensureSchema${version}`;
-
-    if (typeof target[aliasName] === 'function') {
-      continue;
-    }
-
-    Object.defineProperty(target, aliasName, {
-      configurable: true,
-      enumerable: true,
-      writable: true,
-      value: createEnsureSchemaAlias(version)
-    });
-  }
+  ensureSchemaAliases[`ensureSchema${version}`] = alias;
 }
 
 async function getUserByUsername(username) {
@@ -841,16 +822,12 @@ const exported = {
   createSession,
   getSession,
   deleteSession,
-  ensureMeasurementDefaults
+  ensureMeasurementDefaults,
+  ...ensureSchemaAliases
 };
 
 module.exports = exported;
 
 // Align the CommonJS helpers so `exports` continues to mirror `module.exports` for bundlers that
 // capture either reference.
-exports = module.exports; // eslint-disable-line no-undef
-
-// Attach the legacy aliases after exports are configured to ensure every consumer observes the
-// callable functions.
-attachEnsureSchemaAliases(module.exports);
-attachEnsureSchemaAliases(exports); // eslint-disable-line no-undef
+Object.assign(exports, module.exports); // eslint-disable-line no-undef
