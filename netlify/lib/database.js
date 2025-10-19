@@ -474,24 +474,17 @@ async function ensureSchema() {
 // `module.exports` immediately receive callable functions.
 const ensureSchemaAliasVersions = Array.from({ length: 100 }, (_, index) => index + 2);
 
-const ensureSchemaAliases = {};
-
-for (const version of ensureSchemaAliasVersions) {
-  const alias = async function ensureSchemaAlias(...args) {
-    return ensureSchema(...args);
-  };
-
-  try {
-    Object.defineProperty(alias, 'name', {
-      value: `ensureSchema${version}`,
-      configurable: true
-    });
-  } catch (error) {
-    // Some runtimes disallow redefining the function name; ignore the failure because the
-    // callable alias is still usable.
+function attachEnsureSchemaAliases(target) {
+  if (!target || typeof target !== 'object') {
+    return target;
   }
 
-  ensureSchemaAliases[`ensureSchema${version}`] = alias;
+  for (const version of ensureSchemaAliasVersions) {
+    const key = `ensureSchema${version}`;
+    target[key] = ensureSchema;
+  }
+
+  return target;
 }
 
 async function getUserByUsername(username) {
@@ -811,35 +804,20 @@ async function seedInitialData() {
   await query('UPDATE measurement_history SET user_id = $1 WHERE user_id IS NULL', [sampleUser.id]);
 }
 
-const exported = {
-  ensureSchema,
-  seedInitialData,
-  query,
-  getUserByUsername,
-  getUserById,
-  hashPassword,
-  verifyPassword,
-  createSession,
-  getSession,
-  deleteSession,
-  ensureMeasurementDefaults
-};
+const exported = exports;
 
-for (const [name, alias] of Object.entries(ensureSchemaAliases)) {
-  exported[name] = alias;
-}
+exported.ensureSchema = ensureSchema;
+exported.seedInitialData = seedInitialData;
+exported.query = query;
+exported.getUserByUsername = getUserByUsername;
+exported.getUserById = getUserById;
+exported.hashPassword = hashPassword;
+exported.verifyPassword = verifyPassword;
+exported.createSession = createSession;
+exported.getSession = getSession;
+exported.deleteSession = deleteSession;
+exported.ensureMeasurementDefaults = ensureMeasurementDefaults;
 
-// Populate the existing `exports` object before we replace `module.exports`. Some bundlers capture
-// the original reference synchronously, so eagerly assigning the aliases ensures they are callable
-// regardless of when the snapshot occurs.
-for (const [name, value] of Object.entries(exported)) {
-  // eslint-disable-next-line no-undef
-  exports[name] = value;
-}
+attachEnsureSchemaAliases(exported);
 
 module.exports = exported;
-
-// Align the CommonJS helpers so `exports` continues to mirror `module.exports` for bundlers that
-// capture either reference.
-// eslint-disable-next-line no-undef
-Object.assign(exports, module.exports);
