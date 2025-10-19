@@ -473,24 +473,17 @@ async function ensureSchema() {
 // behind several versions.
 const LEGACY_SCHEMA_ALIAS_MAX = 101;
 
-function applyEnsureSchemaAliases(target) {
-  if (!target || typeof target !== 'object') {
-    return target;
-  }
+function buildEnsureSchemaAliasMap() {
+  const aliases = {};
 
   for (let version = 2; version <= LEGACY_SCHEMA_ALIAS_MAX; version += 1) {
-    const key = `ensureSchema${version}`;
-    if (typeof target[key] !== 'function') {
-      Object.defineProperty(target, key, {
-        value: ensureSchema,
-        enumerable: true,
-        configurable: true,
-        writable: true
-      });
-    }
+    const name = `ensureSchema${version}`;
+
+    aliases[name] = async (...args) => ensureSchema(...args);
+    Object.defineProperty(aliases[name], 'name', { value: name });
   }
 
-  return target;
+  return aliases;
 }
 
 async function getUserByUsername(username) {
@@ -810,7 +803,7 @@ async function seedInitialData() {
   await query('UPDATE measurement_history SET user_id = $1 WHERE user_id IS NULL', [sampleUser.id]);
 }
 
-const exported = {
+const baseExports = {
   ensureSchema,
   seedInitialData,
   query,
@@ -824,9 +817,9 @@ const exported = {
   ensureMeasurementDefaults
 };
 
-applyEnsureSchemaAliases(exported);
+const legacyEnsureSchemaAliases = buildEnsureSchemaAliasMap();
 
-Object.assign(exports, exported);
-applyEnsureSchemaAliases(exports);
+const combinedExports = { ...baseExports, ...legacyEnsureSchemaAliases };
 
-module.exports = exports;
+module.exports = combinedExports;
+Object.assign(exports, combinedExports);
