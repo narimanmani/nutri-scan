@@ -466,16 +466,20 @@ async function ensureSchema() {
 }
 
 // Backwards compatibility for older bundled builds that still invoke
-// `ensureSchema2`/`ensureSchema3`. Netlify's deployment pipeline can cache
+// `ensureSchema2`/`ensureSchema3`/`ensureSchema4`. Netlify's deployment pipeline can cache
 // prior versions of the API handler, so exporting stable aliases prevents
 // runtime `TypeError: ensureSchema2 is not a function` (or the newer
-// `ensureSchema3`) errors when the database module ships without the legacy
+// `ensureSchema3`/`ensureSchema4`) errors when the database module ships without the legacy
 // names.
 async function ensureSchema2() {
   return ensureSchema();
 }
 
 async function ensureSchema3() {
+  return ensureSchema();
+}
+
+async function ensureSchema4() {
   return ensureSchema();
 }
 
@@ -800,6 +804,7 @@ module.exports = {
   ensureSchema,
   ensureSchema2,
   ensureSchema3,
+  ensureSchema4,
   seedInitialData,
   query,
   getUserByUsername,
