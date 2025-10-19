@@ -465,6 +465,15 @@ async function ensureSchema() {
   );
 }
 
+// Backwards compatibility for older bundled builds that still invoke
+// `ensureSchema2`. Netlify's deployment pipeline can cache prior
+// versions of the API handler, so exporting a stable alias prevents
+// runtime `TypeError: ensureSchema2 is not a function` errors when
+// the new database module ships without the legacy name.
+async function ensureSchema2() {
+  return ensureSchema();
+}
+
 async function getUserByUsername(username) {
   if (!username) return null;
   const normalized = String(username).trim().toLowerCase();
@@ -784,6 +793,7 @@ async function seedInitialData() {
 
 module.exports = {
   ensureSchema,
+  ensureSchema2,
   seedInitialData,
   query,
   getUserByUsername,
