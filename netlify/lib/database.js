@@ -470,18 +470,48 @@ async function ensureSchema() {
 // handler, so exporting stable aliases prevents runtime `TypeError: ensureSchemaX is not a
 // function` errors when the database module ships without the legacy names. We provide a generous
 // range of aliases so future bootstrap iterations continue to work even if a deployment lags
-// behind several versions.
-const ensureSchemaAliasVersions = Array.from({ length: 60 }, (_, index) => index + 2);
+// behind several versions. The aliases are generated eagerly and attached after `module.exports`
+// is assigned so every consumer (CommonJS or bundled) receives callable functions.
+const ensureSchemaAliasVersions = Array.from({ length: 100 }, (_, index) => index + 2);
 
-const ensureSchemaAliasFactories = ensureSchemaAliasVersions.reduce((aliases, version) => {
-  const aliasName = `ensureSchema${version}`;
-  // Use a dedicated wrapper function for each alias instead of reusing the same function
-  // reference. Some bundlers snapshot the function source when the alias is first required,
-  // so an explicit wrapper guarantees a callable export even when older bundles reference
-  // incrementing helper names.
-  aliases[aliasName] = async (...args) => ensureSchema(...args);
-  return aliases;
-}, {});
+function createEnsureSchemaAlias(version) {
+  const alias = async function ensureSchemaAlias(...args) {
+    return ensureSchema(...args);
+  };
+
+  try {
+    Object.defineProperty(alias, 'name', {
+      value: `ensureSchema${version}`,
+      configurable: true
+    });
+  } catch (error) {
+    // Some runtimes disallow redefining the function name; ignore the failure because the
+    // callable alias is still usable.
+  }
+
+  return alias;
+}
+
+function attachEnsureSchemaAliases(target) {
+  if (!target || typeof target !== 'object') {
+    return;
+  }
+
+  for (const version of ensureSchemaAliasVersions) {
+    const aliasName = `ensureSchema${version}`;
+
+    if (typeof target[aliasName] === 'function') {
+      continue;
+    }
+
+    Object.defineProperty(target, aliasName, {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: createEnsureSchemaAlias(version)
+    });
+  }
+}
 
 async function getUserByUsername(username) {
   if (!username) return null;
@@ -811,16 +841,16 @@ const exported = {
   createSession,
   getSession,
   deleteSession,
-  ensureMeasurementDefaults,
-  ...ensureSchemaAliasFactories
+  ensureMeasurementDefaults
 };
 
 module.exports = exported;
 
-// Ensure CommonJS' `exports` helper (used by some bundlers) reflects the alias map too. We assign
-// the properties after `module.exports` is set so both `module.exports.ensureSchemaN` and
-// `exports.ensureSchemaN` resolve to callable wrappers.
-for (const [aliasName, fn] of Object.entries(ensureSchemaAliasFactories)) {
-  module.exports[aliasName] = fn;
-  exports[aliasName] = fn; // eslint-disable-line no-undef
-}
+// Align the CommonJS helpers so `exports` continues to mirror `module.exports` for bundlers that
+// capture either reference.
+exports = module.exports; // eslint-disable-line no-undef
+
+// Attach the legacy aliases after exports are configured to ensure every consumer observes the
+// callable functions.
+attachEnsureSchemaAliases(module.exports);
+attachEnsureSchemaAliases(exports); // eslint-disable-line no-undef
