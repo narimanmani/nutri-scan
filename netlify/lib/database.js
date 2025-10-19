@@ -470,19 +470,27 @@ async function ensureSchema() {
 // handler, so exporting stable aliases prevents runtime `TypeError: ensureSchemaX is not a
 // function` errors when the database module ships without the legacy names. We provide a generous
 // range of aliases so future bootstrap iterations continue to work even if a deployment lags
-// behind several versions. The aliases are generated eagerly so bundlers that snapshot
-// `module.exports` immediately receive callable functions.
-const ensureSchemaAliasVersions = Array.from({ length: 100 }, (_, index) => index + 2);
+// behind several versions.
+const LEGACY_SCHEMA_ALIAS_MAX = 101;
 
-function buildEnsureSchemaAliasMap() {
-  const aliases = {};
-
-  for (const version of ensureSchemaAliasVersions) {
-    const key = `ensureSchema${version}`;
-    aliases[key] = () => ensureSchema();
+function applyEnsureSchemaAliases(target) {
+  if (!target || typeof target !== 'object') {
+    return target;
   }
 
-  return aliases;
+  for (let version = 2; version <= LEGACY_SCHEMA_ALIAS_MAX; version += 1) {
+    const key = `ensureSchema${version}`;
+    if (typeof target[key] !== 'function') {
+      Object.defineProperty(target, key, {
+        value: ensureSchema,
+        enumerable: true,
+        configurable: true,
+        writable: true
+      });
+    }
+  }
+
+  return target;
 }
 
 async function getUserByUsername(username) {
@@ -802,8 +810,6 @@ async function seedInitialData() {
   await query('UPDATE measurement_history SET user_id = $1 WHERE user_id IS NULL', [sampleUser.id]);
 }
 
-const ensureSchemaAliases = buildEnsureSchemaAliasMap();
-
 const exported = {
   ensureSchema,
   seedInitialData,
@@ -815,10 +821,12 @@ const exported = {
   createSession,
   getSession,
   deleteSession,
-  ensureMeasurementDefaults,
-  ...ensureSchemaAliases
+  ensureMeasurementDefaults
 };
 
-Object.assign(exports, exported);
+applyEnsureSchemaAliases(exported);
 
-module.exports = exported;
+Object.assign(exports, exported);
+applyEnsureSchemaAliases(exports);
+
+module.exports = exports;
