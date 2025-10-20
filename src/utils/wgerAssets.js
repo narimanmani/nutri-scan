@@ -3,45 +3,36 @@ const WGER_HOSTNAMES = new Set(['wger.de', 'www.wger.de']);
 const ALLOWED_PATH_PREFIXES = ['/static/images/muscles/'];
 
 const LOCAL_SILHOUETTE_MODULES = import.meta.glob('@/muscles/*.svg', { eager: true, import: 'default' });
-const LOCAL_MAIN_MUSCLE_MODULES = import.meta.glob('@/muscles/main/**/*.svg', { eager: true, import: 'default' });
-const LOCAL_SECONDARY_MUSCLE_MODULES = import.meta.glob('@/muscles/secondary/**/*.svg', {
+const LOCAL_MAIN_MUSCLE_MODULES = import.meta.glob('@/muscles/main/*.svg', { eager: true, import: 'default' });
+const LOCAL_SECONDARY_MUSCLE_MODULES = import.meta.glob('@/muscles/secondary/*.svg', {
   eager: true,
   import: 'default',
 });
 
-function createAssetLookup(modules) {
+function buildMuscleAssetMaps(modules) {
   const byFile = new Map();
   const byId = new Map();
 
   Object.entries(modules).forEach(([path, url]) => {
-    const segments = path.split('/');
-    const fileName = segments[segments.length - 1];
+    const fileName = path.split('/').pop()?.toLowerCase() || '';
     if (!fileName) return;
 
-    const normalizedFile = fileName.toLowerCase();
-    const baseName = normalizedFile.replace(/\.svg$/i, '');
+    const baseName = fileName.replace(/\.svg$/i, '');
 
-    const variants = new Set([
-      normalizedFile,
-      baseName,
-      `${baseName}.svg`,
-      baseName.replace(/_/g, '-'),
-      baseName.replace(/-/g, '_'),
-      `${baseName.replace(/_/g, '-')}.svg`,
-      `${baseName.replace(/-/g, '_')}.svg`,
-    ]);
+    const hyphenVariant = baseName.replace(/_/g, '-');
+    const underscoreVariant = baseName.replace(/-/g, '_');
 
-    variants.forEach((key) => {
+    [fileName, baseName, hyphenVariant, underscoreVariant].forEach((key) => {
       if (key) {
-        byFile.set(key.toLowerCase(), url);
+        byFile.set(key, url);
       }
     });
 
-    const idMatch = baseName.match(/(\d+)/g);
-    if (idMatch && idMatch.length > 0) {
-      const id = idMatch[idMatch.length - 1];
+    const idMatch = baseName.match(/muscle[-_](\d+)$/i);
+    if (idMatch) {
+      const [, id] = idMatch;
       if (id) {
-        byId.set(id, url);
+        byId.set(Number(id), url);
       }
     }
   });
@@ -49,8 +40,8 @@ function createAssetLookup(modules) {
   return { byFile, byId };
 }
 
-const LOCAL_MAIN_ASSETS = createAssetLookup(LOCAL_MAIN_MUSCLE_MODULES);
-const LOCAL_SECONDARY_ASSETS = createAssetLookup(LOCAL_SECONDARY_MUSCLE_MODULES);
+const LOCAL_MAIN_ASSETS = buildMuscleAssetMaps(LOCAL_MAIN_MUSCLE_MODULES);
+const LOCAL_SECONDARY_ASSETS = buildMuscleAssetMaps(LOCAL_SECONDARY_MUSCLE_MODULES);
 
 const LOCAL_SILHOUETTE_ASSETS = Object.entries(LOCAL_SILHOUETTE_MODULES).reduce(
   (acc, [path, url]) => {
@@ -139,7 +130,7 @@ function resolveLocalMuscleAsset({ lookup, fallbackLookup, fileKey, id }) {
   }
 
   if (Number.isFinite(id)) {
-    const idKey = String(id);
+    const idKey = Number(id);
     const fromId = lookup.byId.get(idKey);
     if (fromId) return fromId;
 
