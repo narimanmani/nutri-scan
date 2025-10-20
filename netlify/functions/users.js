@@ -1,7 +1,10 @@
 const fs = require('fs/promises');
 const path = require('path');
+const os = require('os');
 
-const USERS_FILE_PATH = path.join(process.cwd(), 'netlify', 'data', 'users.json');
+const PRIMARY_USERS_FILE_PATH = path.join(process.cwd(), 'netlify', 'data', 'users.json');
+const FALLBACK_USERS_FILE_PATH = path.join(os.tmpdir(), 'nutri-scan', 'users.json');
+let usersFilePath = PRIMARY_USERS_FILE_PATH;
 const DEFAULT_USERS = (() => {
   try {
     // Reuse the same seed data shipped with the client bundle.
@@ -27,17 +30,57 @@ function buildResponse(statusCode, body) {
 
 async function ensureUsersFile() {
   try {
-    await fs.access(USERS_FILE_PATH);
-    return;
+    await fs.access(usersFilePath);
+    return usersFilePath;
   } catch (error) {
     if (error && error.code !== 'ENOENT') {
+      // If we cannot even stat the path because it is read-only, fall back to a
+      // writable temp directory.
+      if (shouldFallBack(error)) {
+        return switchToFallbackPath();
+      }
       throw error;
     }
   }
 
-  await fs.mkdir(path.dirname(USERS_FILE_PATH), { recursive: true });
+  try {
+    await fs.mkdir(path.dirname(usersFilePath), { recursive: true });
+  } catch (error) {
+    if (shouldFallBack(error)) {
+      return switchToFallbackPath();
+    }
+    throw error;
+  }
+
   const seed = Array.isArray(DEFAULT_USERS) ? DEFAULT_USERS : [];
-  await fs.writeFile(USERS_FILE_PATH, JSON.stringify(seed, null, 2));
+  try {
+    await fs.writeFile(usersFilePath, JSON.stringify(seed, null, 2));
+  } catch (error) {
+    if (shouldFallBack(error)) {
+      return switchToFallbackPath();
+    }
+    throw error;
+  }
+
+  return usersFilePath;
+}
+
+function shouldFallBack(error) {
+  return error && (error.code === 'EROFS' || error.code === 'EACCES');
+}
+
+async function switchToFallbackPath() {
+  if (usersFilePath === FALLBACK_USERS_FILE_PATH) {
+    throw new Error('Unable to access writable users datastore.');
+  }
+
+  usersFilePath = FALLBACK_USERS_FILE_PATH;
+  await fs.mkdir(path.dirname(usersFilePath), { recursive: true });
+
+  const seed = Array.isArray(DEFAULT_USERS) ? DEFAULT_USERS : [];
+  await fs.writeFile(usersFilePath, JSON.stringify(seed, null, 2));
+
+  return usersFilePath;
 }
 
 function normalizeTimestamp(value, fallback) {
@@ -83,9 +126,9 @@ function sanitizeRecord(record) {
 }
 
 async function readUsersFromDisk() {
-  await ensureUsersFile();
+  const filePath = await ensureUsersFile();
   try {
-    const contents = await fs.readFile(USERS_FILE_PATH, 'utf8');
+    const contents = await fs.readFile(filePath, 'utf8');
     const parsed = JSON.parse(contents);
     if (!Array.isArray(parsed)) {
       return [];
@@ -98,8 +141,17 @@ async function readUsersFromDisk() {
 }
 
 async function writeUsersToDisk(users) {
-  await ensureUsersFile();
-  await fs.writeFile(USERS_FILE_PATH, `${JSON.stringify(users, null, 2)}\n`, 'utf8');
+  const filePath = await ensureUsersFile();
+  try {
+    await fs.writeFile(filePath, `${JSON.stringify(users, null, 2)}\n`, 'utf8');
+  } catch (error) {
+    if (shouldFallBack(error)) {
+      await switchToFallbackPath();
+      await fs.writeFile(usersFilePath, `${JSON.stringify(users, null, 2)}\n`, 'utf8');
+      return;
+    }
+    throw error;
+  }
 }
 
 exports.handler = async function handler(event) {
