@@ -65,6 +65,7 @@ export default function RecentMeals({ meals, isLoading, onSelectMeal }) {
                         {meal.meal_type}
                       </Badge>
                     </div>
+                    <p className="text-xs text-gray-500 mb-1">User: {meal.userId}</p>
                     <div className="flex items-center gap-4 text-sm text-gray-500">
                       <span>{format(new Date(meal.meal_date || meal.created_date), 'MMM d')}</span>
                       <span>{meal.calories || 0} cal</span>

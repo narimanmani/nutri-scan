@@ -2,6 +2,7 @@ import { generateExerciseInsights, generateSectionOverview } from '@/api/openai.
 
 const BASE_URL = 'https://wger.de/api/v2';
 const BASE_HOST = BASE_URL.replace(/\/?api\/v2\/?$/, '');
+const WGER_MUSCLE_FUNCTION_URL = '/.netlify/functions/wger-muscles';
 
 const rawApiKey = import.meta.env?.VITE_WGER_API_KEY;
 const API_KEY = typeof rawApiKey === 'string' ? rawApiKey.trim() : '';
@@ -190,6 +191,21 @@ function slugify(value = '') {
     .replace(/['"]/g, '')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+function normalizeWgerApiUrl(url = '') {
+  if (!url) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(url, BASE_URL);
+    parsed.protocol = 'https:';
+    parsed.hostname = new URL(BASE_HOST).hostname;
+    return parsed.toString();
+  } catch {
+    return '';
+  }
 }
 
 function normalizeLabel(value = '') {
@@ -534,13 +550,32 @@ export async function generateWorkoutPlanFromMuscles(
 export const WGER_BASE_URL = BASE_URL;
 
 export async function fetchAllMuscles({ signal } = {}) {
+  try {
+    const response = await fetch(WGER_MUSCLE_FUNCTION_URL, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal,
+    });
+
+    if (response.ok) {
+      const payload = await response.json();
+      if (Array.isArray(payload?.muscles) && payload.muscles.length > 0) {
+        return payload.muscles;
+      }
+    }
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw error;
+    }
+  }
+
   const muscles = [];
   let nextUrl = `${BASE_URL}/muscle/?limit=200`;
 
   while (nextUrl) {
     const data = await fetchJson(nextUrl, { signal });
     muscles.push(...(data.results || []));
-    nextUrl = data.next;
+    nextUrl = normalizeWgerApiUrl(data.next);
   }
 
   return muscles;

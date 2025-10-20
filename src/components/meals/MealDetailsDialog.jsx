@@ -137,6 +137,11 @@ export default function MealDetailsDialog({ meal, open, onOpenChange, onEdit }) 
                   <div className="flex flex-wrap items-center gap-3 text-sm text-gray-500">
                     <Badge className={cn('capitalize', typeBadgeClass)}>{meal.meal_type || 'meal'}</Badge>
                     {formattedDate && <span>{formattedDate}</span>}
+                    {meal.userId && (
+                      <span className="text-xs uppercase tracking-wide text-emerald-700">
+                        User: {meal.userId}
+                      </span>
+                    )}
                   </div>
                 </DialogHeader>
 

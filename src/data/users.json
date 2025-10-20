@@ -1,0 +1,20 @@
+[
+  {
+    "username": "sample_user",
+    "displayName": "Sample User",
+    "role": "user",
+    "passwordHash": "18c145f24edd5a8ae219e9edcf7152082c320588d123967ad88c6277b160b4a7",
+    "createdAt": "2024-01-01T00:00:00.000Z",
+    "updatedAt": "2024-01-01T00:00:00.000Z",
+    "lastLoginAt": null
+  },
+  {
+    "username": "admin",
+    "displayName": "Administrator",
+    "role": "admin",
+    "passwordHash": "6dea7de37005e4fe4478411fd5f7b403280550b69ce82ab3115720039aba790d",
+    "createdAt": "2024-01-01T00:00:00.000Z",
+    "updatedAt": "2024-01-01T00:00:00.000Z",
+    "lastLoginAt": null
+  }
+]

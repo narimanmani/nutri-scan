@@ -72,6 +72,7 @@ export default function MealHistoryCard({ meal, onSelect }) {
                     {meal.meal_type}
                   </Badge>
                 </div>
+                <p className="text-xs text-gray-500 mb-2">Logged by: {meal.userId}</p>
 
                 <div className="text-sm text-gray-500 mb-3">
                   {format(new Date(meal.meal_date || meal.created_date), 'EEEE, MMMM d, yyyy')}

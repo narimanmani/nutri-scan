@@ -1,6 +1,7 @@
 import PropTypes from "prop-types";
 import { useEffect, useMemo, useState } from "react";
 import { loadMeasurementHistory } from "@/utils/measurementHistory.js";
+import { useAuth } from "@/context/AuthContext.jsx";
 import { SAMPLE_MEASUREMENT_HISTORY } from "@/data/sampleMeasurementHistory.js";
 
 const HEIGHT_RANGE_CM = { min: 120, max: 230 };
@@ -117,9 +118,8 @@ BodyShapeIcon.propTypes = {
   variant: PropTypes.oneOf(["table", "hero"]),
 };
 
-function buildMeasurementHistory() {
-  const saved = loadMeasurementHistory();
-  const combined = [...SAMPLE_MEASUREMENT_HISTORY, ...saved];
+function buildMeasurementHistory(savedEntries = []) {
+  const combined = [...SAMPLE_MEASUREMENT_HISTORY, ...savedEntries];
   return combined
     .map((entry) => normaliseEntry(entry))
     .sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime());
@@ -625,16 +625,20 @@ function buildCombinedTips(shapeResult, somatotypeResult) {
 }
 
 export default function MeasurementAnalytics() {
+  const { user } = useAuth();
   const [history, setHistory] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
 
   useEffect(() => {
-    const data = buildMeasurementHistory();
+    const savedEntries = user?.id ? loadMeasurementHistory(user.id) : [];
+    const data = buildMeasurementHistory(savedEntries);
     setHistory(data);
     if (data.length) {
       setSelectedId(data[0].id);
+    } else {
+      setSelectedId(null);
     }
-  }, []);
+  }, [user?.id]);
 
   const selectedEntry = useMemo(
     () => history.find((item) => item.id === selectedId) ?? null,

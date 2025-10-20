@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import MuscleSelector from '@/components/workout/MuscleSelector.jsx';
 import { fetchAllMuscles, generateWorkoutPlanFromMuscles } from '@/api/wger.js';
-import { buildWgerAssetProxyUrl } from '@/utils/wgerAssets.js';
+import { buildWgerAssetProxyUrl, getMuscleOverlayAssetUrl } from '@/utils/wgerAssets.js';
+import fallbackMuscleCatalog from '@/data/musclesFallback.json';
 
 const BODY_VIEWS = ['front', 'back'];
 const WGER_ASSET_BASE_URL = 'https://wger.de';
+const FALLBACK_MUSCLES = Array.isArray(fallbackMuscleCatalog) ? fallbackMuscleCatalog : [];
 
 function toAbsoluteAssetUrl(url = '') {
   if (!url) return '';
@@ -49,9 +51,74 @@ function sanitizeList(list) {
   return list.map((item) => sanitizeText(item)).filter(Boolean);
 }
 
+function normalizeMuscleRecords(records) {
+  return records
+    .map((record) => {
+      const id = Number(record?.id);
+      if (!Number.isFinite(id)) return null;
+
+      const label = record?.name_en || record?.name || `Muscle ${id}`;
+      const highlightUrl =
+        getMuscleOverlayAssetUrl({
+          id,
+          variant: 'main',
+          remoteUrl: record?.image_url_main || record?.image_url_secondary || '',
+        }) ||
+        buildWgerAssetProxyUrl(record?.image_url_main || record?.image_url_secondary || '') ||
+        toAbsoluteAssetUrl(record?.image_url_main || record?.image_url_secondary || '');
+      const secondaryUrl =
+        getMuscleOverlayAssetUrl({
+          id,
+          variant: 'secondary',
+          remoteUrl: record?.image_url_secondary || record?.image_url_main || '',
+        }) ||
+        getMuscleOverlayAssetUrl({ id, variant: 'main', remoteUrl: record?.image_url_main || '' }) ||
+        buildWgerAssetProxyUrl(record?.image_url_secondary || record?.image_url_main || '') ||
+        toAbsoluteAssetUrl(record?.image_url_secondary || '');
+      const view = record?.is_front ? 'front' : 'back';
+
+      return {
+        id,
+        key: `muscle-${id}`,
+        label,
+        view,
+        highlightUrl,
+        secondaryUrl,
+        apiIds: [id],
+        description: formatDescription(label),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function withTimeout(promise, timeoutMs, message = 'Request timed out') {
+  let timeoutId;
+
+  const guardedPromise = new Promise((resolve, reject) => {
+    promise
+      .then((value) => {
+        clearTimeout(timeoutId);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      });
+  });
+
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+  });
+
+  return Promise.race([guardedPromise, timeoutPromise]);
+}
+
 export default function WorkoutPlanner() {
   const [view, setView] = useState('front');
-  const [catalog, setCatalog] = useState({ status: 'idle', muscles: [], error: '' });
+  const [catalog, setCatalog] = useState({ status: 'idle', muscles: [], error: '', isFallback: false });
   const [selectedIds, setSelectedIds] = useState([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [plan, setPlan] = useState([]);
@@ -62,41 +129,19 @@ export default function WorkoutPlanner() {
     let isActive = true;
     const controller = new AbortController();
 
-    setCatalog({ status: 'loading', muscles: [], error: '' });
+    setCatalog({ status: 'loading', muscles: [], error: '', isFallback: false });
 
-    fetchAllMuscles({ signal: controller.signal })
+    withTimeout(fetchAllMuscles({ signal: controller.signal }), 8000, 'Timed out while loading muscles')
       .then((records) => {
         if (!isActive) return;
 
-        const normalized = records
-          .map((record) => {
-            const id = record?.id;
-            if (!id) return null;
+        const normalized = normalizeMuscleRecords(records);
 
-            const label = record?.name_en || record?.name || `Muscle ${id}`;
-            const highlightUrl =
-              buildWgerAssetProxyUrl(record?.image_url_main || record?.image_url_secondary || '') ||
-              toAbsoluteAssetUrl(record?.image_url_main || record?.image_url_secondary || '');
-            const secondaryUrl =
-              buildWgerAssetProxyUrl(record?.image_url_secondary || record?.image_url_main || '') ||
-              toAbsoluteAssetUrl(record?.image_url_secondary || '');
-            const view = record?.is_front ? 'front' : 'back';
+        if (normalized.length === 0) {
+          throw new Error('No muscles were returned from the wger API.');
+        }
 
-            return {
-              id,
-              key: `muscle-${id}`,
-              label,
-              view,
-              highlightUrl,
-              secondaryUrl,
-              apiIds: [id],
-              description: formatDescription(label),
-            };
-          })
-          .filter(Boolean)
-          .sort((a, b) => a.label.localeCompare(b.label));
-
-        setCatalog({ status: 'success', muscles: normalized, error: '' });
+        setCatalog({ status: 'success', muscles: normalized, error: '', isFallback: false });
         setSelectedIds((prev) => {
           const normalizedPrev = prev.map((id) => Number(id)).filter((id) => Number.isFinite(id));
           return normalizedPrev.filter((id) => normalized.some((muscle) => Number(muscle.id) === id));
@@ -106,7 +151,30 @@ export default function WorkoutPlanner() {
         if (!isActive || err.name === 'AbortError') {
           return;
         }
-        setCatalog({ status: 'error', muscles: [], error: err.message || 'Unable to load anatomy data.' });
+
+        controller.abort();
+
+        const fallbackNormalized = normalizeMuscleRecords(FALLBACK_MUSCLES);
+
+        if (fallbackNormalized.length > 0) {
+          setCatalog({
+            status: 'success',
+            muscles: fallbackNormalized,
+            error: '',
+            isFallback: true,
+          });
+          setSelectedIds((prev) => {
+            const normalizedPrev = prev.map((id) => Number(id)).filter((id) => Number.isFinite(id));
+            return normalizedPrev.filter((id) => fallbackNormalized.some((muscle) => Number(muscle.id) === id));
+          });
+        } else {
+          setCatalog({
+            status: 'error',
+            muscles: [],
+            error: err.message || 'Unable to load anatomy data.',
+            isFallback: false,
+          });
+        }
       });
 
     return () => {
@@ -265,7 +333,14 @@ export default function WorkoutPlanner() {
             muscles={catalog.muscles}
             selectedIds={selectedIds}
             onToggle={toggleMuscle}
+            isFallback={catalog.isFallback}
           />
+          {catalog.isFallback && (
+            <p className="rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-xs font-medium text-amber-700">
+              Working with offline anatomy data. Muscle overlays may be limited, but you can still select targets from the list
+              below.
+            </p>
+          )}
         </div>
 
         <div className="space-y-6">

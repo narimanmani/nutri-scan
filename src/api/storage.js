@@ -1,13 +1,17 @@
 import mealsSeed from '@/data/meals.json';
 import dietPlansSeed from '@/data/dietPlans.json';
+import { getActiveSessionDetails } from '@/lib/session.js';
 
 const NETLIFY_UPLOAD_ENDPOINT = '/api/upload-photo';
 
 const STORAGE_KEY = 'nutri-scan:meals';
 const DIET_PLAN_STORAGE_KEY = 'nutri-scan:diet-plans';
+const MEAL_STORE_VERSION = 2;
+const DIET_PLAN_STORE_VERSION = 2;
+const DEFAULT_USER_ID = 'sample_user';
 
-let cachedMeals = null;
-let cachedDietPlans = null;
+let cachedMealStore = null;
+let cachedDietPlanStore = null;
 const mealListeners = new Set();
 
 const CANONICAL_UNITS = ['g', 'ml', 'oz', 'cup', 'serving'];
@@ -124,12 +128,16 @@ function sumNutrients(ingredients) {
   );
 }
 
-function withDefaults(meal) {
+function withDefaults(meal, fallbackUserId = DEFAULT_USER_ID) {
   const ingredients = normalizeIngredients(meal.ingredients);
   const totals = ingredients.length > 0 ? sumNutrients(ingredients) : null;
 
   const base = {
     id: meal.id || `meal_${generateId()}`,
+    userId:
+      typeof meal.userId === 'string' && meal.userId.trim().length > 0
+        ? meal.userId.trim()
+        : fallbackUserId,
     meal_name: '',
     meal_type: 'lunch',
     analysis_notes: '',
@@ -213,19 +221,6 @@ async function uploadPhotoIfNeeded(photoUrl) {
   return photoUrl;
 }
 
-function readFromLocalStorage() {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-  try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    return stored ? JSON.parse(stored) : null;
-  } catch (error) {
-    console.warn('Unable to read meals from localStorage:', error);
-    return null;
-  }
-}
-
 function cloneIngredients(ingredients) {
   if (!Array.isArray(ingredients)) {
     return [];
@@ -243,6 +238,10 @@ function cloneMeal(meal) {
 
   return {
     ...meal,
+    userId:
+      typeof meal.userId === 'string' && meal.userId.trim().length > 0
+        ? meal.userId.trim()
+        : DEFAULT_USER_ID,
     ingredients: cloneIngredients(meal.ingredients)
   };
 }
@@ -253,6 +252,11 @@ function cloneMeals(meals) {
   }
 
   return meals.map((meal) => cloneMeal(meal)).filter(Boolean);
+}
+
+function normalizeUserId(userId) {
+  const normalized = typeof userId === 'string' ? userId.trim() : '';
+  return normalized.length > 0 ? normalized : DEFAULT_USER_ID;
 }
 
 function freezeSnapshot(snapshot) {
@@ -269,27 +273,82 @@ function freezeSnapshot(snapshot) {
   return Object.freeze(snapshot);
 }
 
-function createMealsSnapshot() {
-  const source = Array.isArray(cachedMeals) ? cachedMeals : [];
-  return freezeSnapshot(cloneMeals(source));
+function createEmptyMealStore() {
+  return { version: MEAL_STORE_VERSION, users: {} };
 }
 
-function notifyMealListeners() {
-  const snapshot = createMealsSnapshot();
-
-  mealListeners.forEach((listener) => {
-    try {
-      listener(snapshot);
-    } catch (error) {
-      console.error('An error occurred in a meal listener callback:', error);
-    }
-  });
-}
-
-function prepareMealsForStorage(meals, { stripInlinePhotos = false } = {}) {
+function normalizeMealArrayForUser(meals, userId) {
   if (!Array.isArray(meals)) {
     return [];
   }
+
+  const normalizedId = normalizeUserId(userId);
+
+  return meals
+    .map((meal) => {
+      const assignedUserId = normalizeUserId(meal?.userId || normalizedId);
+      return withDefaults({ ...meal, userId: assignedUserId }, assignedUserId);
+    })
+    .filter(Boolean);
+}
+
+function normalizeMealStorePayload(payload) {
+  const store = createEmptyMealStore();
+
+  if (!payload) {
+    return store;
+  }
+
+  if (Array.isArray(payload)) {
+    store.users[DEFAULT_USER_ID] = normalizeMealArrayForUser(payload, DEFAULT_USER_ID);
+    return store;
+  }
+
+  if (payload && typeof payload === 'object') {
+    if (Array.isArray(payload.meals)) {
+      store.users[DEFAULT_USER_ID] = normalizeMealArrayForUser(payload.meals, DEFAULT_USER_ID);
+    }
+
+    if (payload.users && typeof payload.users === 'object') {
+      Object.entries(payload.users).forEach(([userId, meals]) => {
+        const normalizedId = normalizeUserId(userId);
+        store.users[normalizedId] = normalizeMealArrayForUser(meals, normalizedId);
+      });
+    }
+  }
+
+  if (!store.users[DEFAULT_USER_ID]) {
+    store.users[DEFAULT_USER_ID] = [];
+  }
+
+  return store;
+}
+
+function readMealStoreFromLocalStorage() {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (!stored) {
+      return null;
+    }
+
+    const parsed = JSON.parse(stored);
+    return normalizeMealStorePayload(parsed);
+  } catch (error) {
+    console.warn('Unable to read meals from localStorage:', error);
+    return null;
+  }
+}
+
+function prepareMealsForStorage(meals, { stripInlinePhotos = false } = {}, userId = DEFAULT_USER_ID) {
+  if (!Array.isArray(meals)) {
+    return [];
+  }
+
+  const normalizedId = normalizeUserId(userId);
 
   return meals.map((meal) => {
     const safeMeal = { ...(typeof meal === 'object' && meal !== null ? meal : {}) };
@@ -298,9 +357,20 @@ function prepareMealsForStorage(meals, { stripInlinePhotos = false } = {}) {
       safeMeal.photo_url = '';
     }
 
+    safeMeal.userId = normalizeUserId(safeMeal.userId || normalizedId);
     safeMeal.ingredients = cloneIngredients(safeMeal.ingredients);
     return safeMeal;
   });
+}
+
+function prepareMealStoreForStorage(store, options = {}) {
+  const payload = { version: MEAL_STORE_VERSION, users: {} };
+
+  Object.entries(store.users || {}).forEach(([userId, meals]) => {
+    payload.users[userId] = prepareMealsForStorage(meals, options, userId);
+  });
+
+  return payload;
 }
 
 function isQuotaExceededError(error) {
@@ -316,24 +386,24 @@ function isQuotaExceededError(error) {
   return message.toLowerCase().includes('quota');
 }
 
-function writeToLocalStorage(meals) {
+function writeMealStoreToLocalStorage(store) {
   if (typeof window === 'undefined') {
     return;
   }
 
   const attempts = [
     { stripInlinePhotos: false, logFallback: false },
-    { stripInlinePhotos: true, logFallback: true }
+    { stripInlinePhotos: true, logFallback: true },
   ];
 
   for (const attempt of attempts) {
     try {
-      const payload = JSON.stringify(prepareMealsForStorage(meals, attempt));
+      const payload = JSON.stringify(prepareMealStoreForStorage(store, attempt));
       window.localStorage.setItem(STORAGE_KEY, payload);
 
       if (attempt.logFallback) {
         console.warn(
-          'Inline meal photos were removed before saving to keep storage usage within browser limits.'
+          'Inline meal photos were removed before saving to keep storage usage within browser limits.',
         );
       }
 
@@ -347,9 +417,112 @@ function writeToLocalStorage(meals) {
   }
 }
 
+function ensureMealBucket(store, userId) {
+  const normalizedId = normalizeUserId(userId);
+  if (!Array.isArray(store.users[normalizedId])) {
+    store.users[normalizedId] = [];
+  }
+  return normalizedId;
+}
+
+function ensureSampleUserSeed(store) {
+  const normalizedId = normalizeUserId(DEFAULT_USER_ID);
+  if (!Array.isArray(store.users[normalizedId]) || store.users[normalizedId].length === 0) {
+    store.users[normalizedId] = hydrateSeedData(normalizedId);
+    return true;
+  }
+  return false;
+}
+
+async function getMealStore() {
+  if (!cachedMealStore) {
+    const stored = readMealStoreFromLocalStorage();
+    cachedMealStore = stored || createEmptyMealStore();
+    if (ensureSampleUserSeed(cachedMealStore)) {
+      writeMealStoreToLocalStorage(cachedMealStore);
+    }
+  }
+
+  return cachedMealStore;
+}
+
+function buildCombinedMealList(store) {
+  const aggregated = [];
+  Object.entries(store.users || {}).forEach(([userId, meals]) => {
+    if (!Array.isArray(meals)) {
+      return;
+    }
+
+    const normalizedId = normalizeUserId(userId);
+    meals.forEach((meal) => {
+      aggregated.push(cloneMeal({ ...meal, userId: normalizeUserId(meal.userId || normalizedId) }));
+    });
+  });
+  return aggregated;
+}
+
+function getMealsForSession(store, session = getActiveSessionDetails()) {
+  const { userId, role } = session || {};
+  if (!userId) {
+    return [];
+  }
+
+  if (role === 'admin') {
+    return buildCombinedMealList(store);
+  }
+
+  const normalizedId = normalizeUserId(userId);
+  const meals = Array.isArray(store.users[normalizedId]) ? store.users[normalizedId] : [];
+  return meals.map((meal) => cloneMeal({ ...meal, userId: normalizedId })).filter(Boolean);
+}
+
+function findMealRecord(store, id) {
+  if (!id) {
+    return null;
+  }
+
+  for (const [userId, meals] of Object.entries(store.users || {})) {
+    if (!Array.isArray(meals)) {
+      continue;
+    }
+
+    const index = meals.findIndex((meal) => meal.id === id);
+    if (index !== -1) {
+      return {
+        userId: normalizeUserId(userId),
+        index,
+        meal: meals[index],
+      };
+    }
+  }
+
+  return null;
+}
+
+function createMealsSnapshotForSession(session = getActiveSessionDetails()) {
+  if (!cachedMealStore) {
+    return freezeSnapshot([]);
+  }
+
+  return freezeSnapshot(getMealsForSession(cachedMealStore, session));
+}
+
+function notifyMealListeners() {
+  const snapshot = createMealsSnapshotForSession();
+
+  mealListeners.forEach((listener) => {
+    try {
+      listener(snapshot);
+    } catch (error) {
+      console.error('An error occurred in a meal listener callback:', error);
+    }
+  });
+}
+
 function syncCachedMealsFromStorage(rawValue) {
   if (rawValue === null) {
-    cachedMeals = [];
+    cachedMealStore = createEmptyMealStore();
+    ensureSampleUserSeed(cachedMealStore);
     notifyMealListeners();
     return;
   }
@@ -360,10 +533,9 @@ function syncCachedMealsFromStorage(rawValue) {
 
   try {
     const parsed = JSON.parse(rawValue);
-    if (Array.isArray(parsed)) {
-      cachedMeals = parsed.map(withDefaults);
-      notifyMealListeners();
-    }
+    cachedMealStore = normalizeMealStorePayload(parsed);
+    ensureSampleUserSeed(cachedMealStore);
+    notifyMealListeners();
   } catch (error) {
     console.warn('Unable to synchronize meals from storage event:', error);
   }
@@ -378,30 +550,189 @@ if (typeof window !== 'undefined' && !window.__nutriScanMealsStorageListener) {
   });
 }
 
-function readPlansFromLocalStorage() {
+function normalizePlanArrayForUser(plans, userId) {
+  if (!Array.isArray(plans)) {
+    return [];
+  }
+
+  const normalizedId = normalizeUserId(userId);
+  return plans.map((plan, index) => withPlanDefaults({ ...plan, userId: normalizedId }, index, normalizedId));
+}
+
+function normalizePlanStorePayload(payload) {
+  const store = createEmptyPlanStore();
+
+  if (!payload) {
+    return store;
+  }
+
+  if (Array.isArray(payload)) {
+    store.users[DEFAULT_USER_ID] = normalizePlanArrayForUser(payload, DEFAULT_USER_ID);
+    return store;
+  }
+
+  if (payload && typeof payload === 'object') {
+    if (Array.isArray(payload.plans)) {
+      store.users[DEFAULT_USER_ID] = normalizePlanArrayForUser(payload.plans, DEFAULT_USER_ID);
+    }
+
+    if (payload.users && typeof payload.users === 'object') {
+      Object.entries(payload.users).forEach(([userId, plans]) => {
+        const normalizedId = normalizeUserId(userId);
+        store.users[normalizedId] = normalizePlanArrayForUser(plans, normalizedId);
+      });
+    }
+  }
+
+  if (!store.users[DEFAULT_USER_ID]) {
+    store.users[DEFAULT_USER_ID] = [];
+  }
+
+  return store;
+}
+
+function readPlanStoreFromLocalStorage() {
   if (typeof window === 'undefined') {
     return null;
   }
 
   try {
     const stored = window.localStorage.getItem(DIET_PLAN_STORAGE_KEY);
-    return stored ? JSON.parse(stored) : null;
+    if (!stored) {
+      return null;
+    }
+
+    const parsed = JSON.parse(stored);
+    return normalizePlanStorePayload(parsed);
   } catch (error) {
     console.warn('Unable to read diet plans from localStorage:', error);
     return null;
   }
 }
 
-function writePlansToLocalStorage(plans) {
+function preparePlanStoreForStorage(store) {
+  const payload = { version: DIET_PLAN_STORE_VERSION, users: {} };
+
+  Object.entries(store.users || {}).forEach(([userId, plans]) => {
+    payload.users[userId] = normalizePlanArrayForUser(plans, userId);
+  });
+
+  return payload;
+}
+
+function writePlanStoreToLocalStorage(store) {
   if (typeof window === 'undefined') {
     return;
   }
 
   try {
-    window.localStorage.setItem(DIET_PLAN_STORAGE_KEY, JSON.stringify(plans));
+    const payload = JSON.stringify(preparePlanStoreForStorage(store));
+    window.localStorage.setItem(DIET_PLAN_STORAGE_KEY, payload);
   } catch (error) {
     console.warn('Unable to persist diet plans to localStorage:', error);
   }
+}
+
+function ensurePlanBucket(store, userId) {
+  const normalizedId = normalizeUserId(userId);
+  if (!Array.isArray(store.users[normalizedId])) {
+    store.users[normalizedId] = [];
+  }
+  return normalizedId;
+}
+
+function ensurePlanSeedForUser(store, userId) {
+  const normalizedId = ensurePlanBucket(store, userId);
+  if (store.users[normalizedId].length === 0) {
+    store.users[normalizedId] = hydrateDietPlanSeed(normalizedId);
+    return true;
+  }
+  return false;
+}
+
+async function getDietPlanStore() {
+  if (!cachedDietPlanStore) {
+    const stored = readPlanStoreFromLocalStorage();
+    cachedDietPlanStore = stored || createEmptyPlanStore();
+    let mutated = false;
+    mutated = ensurePlanSeedForUser(cachedDietPlanStore, DEFAULT_USER_ID) || mutated;
+    if (mutated) {
+      writePlanStoreToLocalStorage(cachedDietPlanStore);
+    }
+  }
+
+  return cachedDietPlanStore;
+}
+
+function buildCombinedPlanList(store) {
+  const aggregated = [];
+  Object.entries(store.users || {}).forEach(([userId, plans]) => {
+    if (!Array.isArray(plans)) {
+      return;
+    }
+
+    plans.forEach((plan) => {
+      aggregated.push(clonePlan({ ...plan, userId: normalizeUserId(plan.userId || userId) }));
+    });
+  });
+  return aggregated;
+}
+
+function getPlansForSession(store, session = getActiveSessionDetails()) {
+  const { userId, role } = session || {};
+  if (!userId) {
+    return [];
+  }
+
+  if (role === 'admin') {
+    return buildCombinedPlanList(store);
+  }
+
+  const normalizedId = ensurePlanBucket(store, userId);
+  const seeded = ensurePlanSeedForUser(store, normalizedId);
+  if (seeded) {
+    writePlanStoreToLocalStorage(store);
+  }
+  return store.users[normalizedId].map((plan) => clonePlan(plan));
+}
+
+function findPlanRecord(store, id) {
+  if (!id) {
+    return null;
+  }
+
+  for (const [userId, plans] of Object.entries(store.users || {})) {
+    if (!Array.isArray(plans)) {
+      continue;
+    }
+
+    const index = plans.findIndex((plan) => plan.id === id);
+    if (index !== -1) {
+      return {
+        userId: normalizeUserId(userId),
+        index,
+        plan: plans[index],
+      };
+    }
+  }
+
+  return null;
+}
+
+async function getDietPlans() {
+  const store = await getDietPlanStore();
+  const session = getActiveSessionDetails();
+  return getPlansForSession(store, session);
+}
+
+function insertPlanIntoBucket(bucket = [], plan, now) {
+  const filtered = bucket.filter((existing) => existing.id !== plan.id);
+  if (plan.isActive) {
+    const normalized = filtered.map((existing) => ({ ...existing, isActive: false, updated_at: now }));
+    return [plan, ...normalized];
+  }
+
+  return [plan, ...filtered.map((existing) => ({ ...existing }))];
 }
 
 function normalizeMacroTargets(targets = {}) {
@@ -439,8 +770,9 @@ function normalizeMealGuidance(entries = []) {
     .filter(Boolean);
 }
 
-function withPlanDefaults(plan, index = 0) {
+function withPlanDefaults(plan, index = 0, fallbackUserId = DEFAULT_USER_ID) {
   const safe = typeof plan === 'object' && plan !== null ? { ...plan } : {};
+  const normalizedUserId = normalizeUserId(safe.userId || fallbackUserId);
   const createdAt = typeof safe.created_at === 'string' && safe.created_at.length > 0
     ? safe.created_at
     : typeof safe.createdAt === 'string' && safe.createdAt.length > 0
@@ -486,6 +818,7 @@ function withPlanDefaults(plan, index = 0) {
       typeof safe.source === 'string' && safe.source.length > 0
         ? safe.source
         : 'template',
+    userId: normalizedUserId,
   };
 
   return normalized;
@@ -498,6 +831,7 @@ function clonePlan(plan) {
 
   return {
     ...plan,
+    userId: normalizeUserId(plan.userId || DEFAULT_USER_ID),
     macroTargets: { ...(plan.macroTargets || {}) },
     focus: Array.isArray(plan.focus) ? [...plan.focus] : [],
     mealGuidance: Array.isArray(plan.mealGuidance)
@@ -507,15 +841,18 @@ function clonePlan(plan) {
   };
 }
 
-function hydrateDietPlanSeed() {
+function hydrateDietPlanSeed(userId = DEFAULT_USER_ID) {
+  const normalizedId = normalizeUserId(userId);
   const hydrated = dietPlansSeed.map((plan, index) =>
     withPlanDefaults(
       {
         ...plan,
         isActive: index === 0,
         source: 'template',
+        userId: normalizedId,
       },
       index,
+      normalizedId,
     ),
   );
 
@@ -526,54 +863,32 @@ function hydrateDietPlanSeed() {
   return hydrated;
 }
 
-async function getDietPlans() {
-  if (cachedDietPlans) {
-    return cachedDietPlans;
-  }
-
-  const stored = readPlansFromLocalStorage();
-  if (stored && Array.isArray(stored)) {
-    const normalized = stored.map((plan, index) => withPlanDefaults(plan, index));
-
-    if (!normalized.some((plan) => plan.isActive) && normalized.length > 0) {
-      normalized[0] = { ...normalized[0], isActive: true };
-    }
-
-    cachedDietPlans = normalized;
-    return cachedDietPlans;
-  }
-
-  cachedDietPlans = hydrateDietPlanSeed();
-  writePlansToLocalStorage(cachedDietPlans);
-  return cachedDietPlans;
+function createEmptyPlanStore() {
+  return { version: DIET_PLAN_STORE_VERSION, users: {} };
 }
 
-function hydrateSeedData() {
+function hydrateSeedData(userId = DEFAULT_USER_ID) {
+  const normalizedId = normalizeUserId(userId);
   return mealsSeed.map((meal) => {
-    const createdDate = meal.created_date
-      ?? (meal.meal_date ? new Date(meal.meal_date).toISOString() : new Date().toISOString());
+    const createdDate =
+      meal.created_date ?? (meal.meal_date ? new Date(meal.meal_date).toISOString() : new Date().toISOString());
 
-    return withDefaults({
-      ...meal,
-      created_date: createdDate
-    });
+    return withDefaults(
+      {
+        ...meal,
+        created_date: createdDate,
+        userId: normalizedId,
+      },
+      normalizedId,
+    );
   });
 }
 
-async function getMeals() {
-  if (cachedMeals) {
-    return cachedMeals;
-  }
-
-  const stored = readFromLocalStorage();
-  if (stored && Array.isArray(stored)) {
-    cachedMeals = stored.map(withDefaults);
-    return cachedMeals;
-  }
-
-  cachedMeals = hydrateSeedData();
-  writeToLocalStorage(cachedMeals);
-  return cachedMeals;
+async function getMealsForCurrentSession() {
+  const store = await getMealStore();
+  const session = getActiveSessionDetails();
+  const meals = getMealsForSession(store, session);
+  return { store, session, meals };
 }
 
 export function subscribeToMealChanges(listener, { immediate = false } = {}) {
@@ -586,8 +901,8 @@ export function subscribeToMealChanges(listener, { immediate = false } = {}) {
   if (immediate) {
     (async () => {
       try {
-        await getMeals();
-        listener(createMealsSnapshot());
+        await getMealStore();
+        listener(createMealsSnapshotForSession());
       } catch (error) {
         console.error('Unable to deliver the initial meals snapshot to a listener:', error);
       }
@@ -600,7 +915,7 @@ export function subscribeToMealChanges(listener, { immediate = false } = {}) {
 }
 
 export async function listMeals(order = '-created_date', limit) {
-  const meals = await getMeals();
+  const { meals } = await getMealsForCurrentSession();
   const sortValue = typeof order === 'string' && order.length > 0 ? order : '-created_date';
   const direction = sortValue.startsWith('-') ? -1 : 1;
   const key = sortValue.replace('-', '') || 'created_date';
@@ -615,20 +930,32 @@ export async function listMeals(order = '-created_date', limit) {
 }
 
 export async function createMeal(meal) {
-  const meals = await getMeals();
-  const storedPhotoUrl = await uploadPhotoIfNeeded(meal.photo_url);
-  const newMeal = withDefaults({
-    ...meal,
-    id: `meal_${generateId()}`,
-    created_date: new Date().toISOString(),
-    photo_url: storedPhotoUrl
-  });
+  const { store, session } = await getMealsForCurrentSession();
+  const { userId } = session;
 
-  meals.unshift(newMeal);
-  cachedMeals = meals;
-  writeToLocalStorage(meals);
+  if (!userId) {
+    throw new Error('You must be signed in to log meals.');
+  }
+
+  const normalizedUserId = normalizeUserId(userId);
+  ensureMealBucket(store, normalizedUserId);
+
+  const storedPhotoUrl = await uploadPhotoIfNeeded(meal.photo_url);
+  const newMeal = withDefaults(
+    {
+      ...meal,
+      id: `meal_${generateId()}`,
+      created_date: new Date().toISOString(),
+      photo_url: storedPhotoUrl,
+      userId: normalizedUserId,
+    },
+    normalizedUserId,
+  );
+
+  store.users[normalizedUserId].unshift(newMeal);
+  writeMealStoreToLocalStorage(store);
   notifyMealListeners();
-  return newMeal;
+  return cloneMeal(newMeal);
 }
 
 export async function getMealById(id) {
@@ -636,9 +963,22 @@ export async function getMealById(id) {
     return null;
   }
 
-  const meals = await getMeals();
-  const found = meals.find((meal) => meal.id === id);
-  return found ? withDefaults(found) : null;
+  const store = await getMealStore();
+  const session = getActiveSessionDetails();
+  const record = findMealRecord(store, id);
+
+  if (!record) {
+    return null;
+  }
+
+  if (session.role !== 'admin') {
+    const normalizedSessionId = normalizeUserId(session.userId);
+    if (!session.userId || normalizedSessionId !== record.userId) {
+      return null;
+    }
+  }
+
+  return withDefaults({ ...record.meal }, record.userId);
 }
 
 export async function updateMeal(id, updates = {}) {
@@ -646,40 +986,80 @@ export async function updateMeal(id, updates = {}) {
     throw new Error('An id is required to update a meal.');
   }
 
-  const meals = await getMeals();
-  const index = meals.findIndex((meal) => meal.id === id);
+  const store = await getMealStore();
+  const session = getActiveSessionDetails();
+  const record = findMealRecord(store, id);
 
-  if (index === -1) {
+  if (!record) {
     throw new Error('Meal not found.');
   }
 
-  const existing = meals[index];
+  const isAdmin = session.role === 'admin';
+  const normalizedSessionId = normalizeUserId(session.userId);
+  if (!isAdmin && (!session.userId || normalizedSessionId !== record.userId)) {
+    throw new Error('You do not have permission to update this meal.');
+  }
+
+  const existing = record.meal;
   const nextPhotoSource =
     typeof updates.photo_url === 'string' && updates.photo_url.length > 0
       ? updates.photo_url
       : existing.photo_url;
   const storedPhotoUrl = await uploadPhotoIfNeeded(nextPhotoSource);
 
-  const updatedMeal = withDefaults({
-    ...existing,
-    ...updates,
-    id: existing.id,
-    created_date: existing.created_date,
-    photo_url: storedPhotoUrl
-  });
+  const requestedUserId = updates.userId ? normalizeUserId(updates.userId) : record.userId;
+  if (requestedUserId !== record.userId && !isAdmin) {
+    throw new Error('You do not have permission to reassign this meal.');
+  }
 
-  meals[index] = updatedMeal;
-  cachedMeals = meals;
-  writeToLocalStorage(meals);
+  ensureMealBucket(store, requestedUserId);
+
+  const updatedMeal = withDefaults(
+    {
+      ...existing,
+      ...updates,
+      id: existing.id,
+      created_date: existing.created_date,
+      photo_url: storedPhotoUrl,
+      userId: requestedUserId,
+    },
+    requestedUserId,
+  );
+
+  if (requestedUserId !== record.userId) {
+    store.users[record.userId].splice(record.index, 1);
+    store.users[requestedUserId].unshift(updatedMeal);
+  } else {
+    store.users[requestedUserId][record.index] = updatedMeal;
+  }
+
+  writeMealStoreToLocalStorage(store);
   notifyMealListeners();
-  return updatedMeal;
+  return cloneMeal(updatedMeal);
 }
 
 export async function clearMeals() {
-  cachedMeals = hydrateSeedData();
-  writeToLocalStorage(cachedMeals);
+  const store = await getMealStore();
+  const session = getActiveSessionDetails();
+
+  if (session.role === 'admin') {
+    cachedMealStore = createEmptyMealStore();
+    ensureSampleUserSeed(cachedMealStore);
+    writeMealStoreToLocalStorage(cachedMealStore);
+    notifyMealListeners();
+    return createMealsSnapshotForSession(session);
+  }
+
+  if (!session.userId) {
+    return [];
+  }
+
+  const normalizedId = normalizeUserId(session.userId);
+  ensureMealBucket(store, normalizedId);
+  store.users[normalizedId] = [];
+  writeMealStoreToLocalStorage(store);
   notifyMealListeners();
-  return cachedMeals;
+  return [];
 }
 
 export async function listDietPlans() {
@@ -694,7 +1074,7 @@ export async function listDietPlans() {
     return bTime - aTime;
   });
 
-  return sorted.map(clonePlan);
+  return sorted.map((plan) => clonePlan(plan));
 }
 
 export async function getDietPlanById(id) {
@@ -702,19 +1082,41 @@ export async function getDietPlanById(id) {
     return null;
   }
 
-  const plans = await getDietPlans();
-  const found = plans.find((plan) => plan.id === id);
-  return found ? clonePlan(found) : null;
+  const store = await getDietPlanStore();
+  const session = getActiveSessionDetails();
+  const record = findPlanRecord(store, id);
+
+  if (!record) {
+    return null;
+  }
+
+  if (session.role !== 'admin') {
+    const normalizedSessionId = normalizeUserId(session.userId);
+    if (!session.userId || normalizedSessionId !== record.userId) {
+      return null;
+    }
+  }
+
+  return clonePlan(record.plan);
 }
 
 export async function getActiveDietPlan() {
-  const plans = await getDietPlans();
+  const store = await getDietPlanStore();
+  const session = getActiveSessionDetails();
+  const plans = getPlansForSession(store, session);
   const active = plans.find((plan) => plan.isActive);
   return active ? clonePlan(active) : null;
 }
 
 export async function createDietPlan(plan) {
-  const plans = await getDietPlans();
+  const store = await getDietPlanStore();
+  const session = getActiveSessionDetails();
+
+  if (!session.userId) {
+    throw new Error('You must be signed in to create a diet plan.');
+  }
+
+  const normalizedUserId = ensurePlanBucket(store, session.userId);
   const now = new Date().toISOString();
   const basePlan = {
     ...plan,
@@ -722,21 +1124,13 @@ export async function createDietPlan(plan) {
     created_at: now,
     updated_at: now,
     source: plan?.source || 'custom',
+    userId: normalizedUserId,
   };
 
-  const normalized = withPlanDefaults(basePlan, plans.length);
+  const normalized = withPlanDefaults(basePlan, store.users[normalizedUserId].length, normalizedUserId);
+  store.users[normalizedUserId] = insertPlanIntoBucket(store.users[normalizedUserId], normalized, now);
 
-  const nextPlans = normalized.isActive
-    ? plans.map((existing) =>
-        existing.isActive
-          ? { ...existing, isActive: false, updated_at: now }
-          : { ...existing },
-      )
-    : plans.map((existing) => ({ ...existing }));
-
-  const updated = [normalized, ...nextPlans];
-  cachedDietPlans = updated;
-  writePlansToLocalStorage(updated);
+  writePlanStoreToLocalStorage(store);
   return clonePlan(normalized);
 }
 
@@ -745,15 +1139,28 @@ export async function updateDietPlan(id, updates = {}) {
     throw new Error('An id is required to update a diet plan.');
   }
 
-  const plans = await getDietPlans();
-  const index = plans.findIndex((plan) => plan.id === id);
+  const store = await getDietPlanStore();
+  const session = getActiveSessionDetails();
+  const record = findPlanRecord(store, id);
 
-  if (index === -1) {
+  if (!record) {
     throw new Error('Diet plan not found.');
   }
 
+  const isAdmin = session.role === 'admin';
+  const normalizedSessionId = normalizeUserId(session.userId);
+  if (!isAdmin && (!session.userId || normalizedSessionId !== record.userId)) {
+    throw new Error('You do not have permission to update this diet plan.');
+  }
+
   const now = new Date().toISOString();
-  const existing = plans[index];
+  const existing = record.plan;
+  const targetUserId = updates.userId ? normalizeUserId(updates.userId) : record.userId;
+  if (targetUserId !== record.userId && !isAdmin) {
+    throw new Error('You do not have permission to reassign this diet plan.');
+  }
+
+  ensurePlanBucket(store, targetUserId);
 
   const normalized = withPlanDefaults(
     {
@@ -763,25 +1170,17 @@ export async function updateDietPlan(id, updates = {}) {
       created_at: existing.created_at,
       updated_at: now,
       source: updates.source || existing.source,
+      userId: targetUserId,
       isActive: typeof updates.isActive === 'boolean' ? updates.isActive : existing.isActive,
     },
-    index,
+    record.index,
+    targetUserId,
   );
 
-  const nextPlans = plans.map((plan) => {
-    if (plan.id === id) {
-      return normalized;
-    }
+  store.users[record.userId] = store.users[record.userId].filter((planItem) => planItem.id !== id);
+  store.users[targetUserId] = insertPlanIntoBucket(store.users[targetUserId], normalized, now);
 
-    if (normalized.isActive && plan.isActive) {
-      return { ...plan, isActive: false, updated_at: now };
-    }
-
-    return { ...plan };
-  });
-
-  cachedDietPlans = nextPlans;
-  writePlansToLocalStorage(nextPlans);
+  writePlanStoreToLocalStorage(store);
   return clonePlan(normalized);
 }
 
@@ -790,29 +1189,30 @@ export async function setActiveDietPlan(id) {
     throw new Error('An id is required to set the active diet plan.');
   }
 
-  const plans = await getDietPlans();
-  const now = new Date().toISOString();
-  let found = false;
+  const store = await getDietPlanStore();
+  const session = getActiveSessionDetails();
+  const record = findPlanRecord(store, id);
 
-  const nextPlans = plans.map((plan) => {
-    if (plan.id === id) {
-      found = true;
-      return { ...plan, isActive: true, updated_at: now };
-    }
-
-    if (plan.isActive) {
-      return { ...plan, isActive: false, updated_at: now };
-    }
-
-    return { ...plan };
-  });
-
-  if (!found) {
+  if (!record) {
     throw new Error('Diet plan not found.');
   }
 
-  cachedDietPlans = nextPlans;
-  writePlansToLocalStorage(nextPlans);
-  const active = nextPlans.find((plan) => plan.id === id);
+  const isAdmin = session.role === 'admin';
+  const normalizedSessionId = normalizeUserId(session.userId);
+  if (!isAdmin && (!session.userId || normalizedSessionId !== record.userId)) {
+    throw new Error('You do not have permission to activate this diet plan.');
+  }
+
+  const now = new Date().toISOString();
+  const bucket = store.users[record.userId].map((plan) => {
+    if (plan.id === id) {
+      return { ...plan, isActive: true, updated_at: now };
+    }
+    return { ...plan, isActive: false, updated_at: now };
+  });
+
+  store.users[record.userId] = bucket;
+  writePlanStoreToLocalStorage(store);
+  const active = bucket.find((plan) => plan.id === id) || null;
   return active ? clonePlan(active) : null;
 }
