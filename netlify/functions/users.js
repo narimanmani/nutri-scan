@@ -46,7 +46,7 @@ async function ensureUsersFile() {
   try {
     await fs.mkdir(path.dirname(usersFilePath), { recursive: true });
   } catch (error) {
-    if (shouldFallBack(error)) {
+    if (shouldFallBack(error, { includeMissing: true })) {
       return switchToFallbackPath();
     }
     throw error;
@@ -56,7 +56,7 @@ async function ensureUsersFile() {
   try {
     await fs.writeFile(usersFilePath, JSON.stringify(seed, null, 2));
   } catch (error) {
-    if (shouldFallBack(error)) {
+    if (shouldFallBack(error, { includeMissing: true })) {
       return switchToFallbackPath();
     }
     throw error;
@@ -65,8 +65,20 @@ async function ensureUsersFile() {
   return usersFilePath;
 }
 
-function shouldFallBack(error) {
-  return error && (error.code === 'EROFS' || error.code === 'EACCES');
+function shouldFallBack(error, { includeMissing = false } = {}) {
+  if (!error) {
+    return false;
+  }
+
+  if (error.code === 'EROFS' || error.code === 'EACCES' || error.code === 'EPERM' || error.code === 'ENOTDIR') {
+    return true;
+  }
+
+  if (includeMissing && error.code === 'ENOENT') {
+    return true;
+  }
+
+  return false;
 }
 
 async function switchToFallbackPath() {
@@ -145,7 +157,7 @@ async function writeUsersToDisk(users) {
   try {
     await fs.writeFile(filePath, `${JSON.stringify(users, null, 2)}\n`, 'utf8');
   } catch (error) {
-    if (shouldFallBack(error)) {
+    if (shouldFallBack(error, { includeMissing: true })) {
       await switchToFallbackPath();
       await fs.writeFile(usersFilePath, `${JSON.stringify(users, null, 2)}\n`, 'utf8');
       return;
