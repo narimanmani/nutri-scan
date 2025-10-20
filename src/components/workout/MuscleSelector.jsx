@@ -25,6 +25,7 @@ export default function MuscleSelector({
   onToggle,
   status = 'idle',
   error = '',
+  isFallback = false,
 }) {
   const [hoveredId, setHoveredId] = useState(null);
   const normalizedSelectedIds = useMemo(
@@ -54,6 +55,7 @@ export default function MuscleSelector({
 
   const baseImage = getSilhouetteAsset(view);
   const statusCopy = getStatusCopy(status, error);
+  const silhouetteInteractive = status === 'success' && !isFallback;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(22rem,1fr)_minmax(0,1fr)] lg:items-start lg:gap-8">
@@ -62,8 +64,8 @@ export default function MuscleSelector({
         onPointerLeave={() => setHoveredId(null)}
         role="presentation"
         style={{
-          cursor: status === 'success' ? 'pointer' : 'default',
-          pointerEvents: status === 'success' ? 'auto' : 'none',
+          cursor: silhouetteInteractive ? 'pointer' : 'default',
+          pointerEvents: silhouetteInteractive ? 'auto' : 'none',
         }}
       >
         {baseImage ? (
