@@ -2,6 +2,72 @@ const WGER_BASE_URL = 'https://wger.de';
 const WGER_HOSTNAMES = new Set(['wger.de', 'www.wger.de']);
 const ALLOWED_PATH_PREFIXES = ['/static/images/muscles/'];
 
+const LOCAL_SILHOUETTE_MODULES = import.meta.glob('@/muscles/*.svg', { eager: true, import: 'default' });
+const LOCAL_MAIN_MUSCLE_MODULES = import.meta.glob('@/muscles/main/**/*.svg', { eager: true, import: 'default' });
+const LOCAL_SECONDARY_MUSCLE_MODULES = import.meta.glob('@/muscles/secondary/**/*.svg', {
+  eager: true,
+  import: 'default',
+});
+
+function createAssetLookup(modules) {
+  const byFile = new Map();
+  const byId = new Map();
+
+  Object.entries(modules).forEach(([path, url]) => {
+    const segments = path.split('/');
+    const fileName = segments[segments.length - 1];
+    if (!fileName) return;
+
+    const normalizedFile = fileName.toLowerCase();
+    const baseName = normalizedFile.replace(/\.svg$/i, '');
+
+    const variants = new Set([
+      normalizedFile,
+      baseName,
+      `${baseName}.svg`,
+      baseName.replace(/_/g, '-'),
+      baseName.replace(/-/g, '_'),
+      `${baseName.replace(/_/g, '-')}.svg`,
+      `${baseName.replace(/-/g, '_')}.svg`,
+    ]);
+
+    variants.forEach((key) => {
+      if (key) {
+        byFile.set(key.toLowerCase(), url);
+      }
+    });
+
+    const idMatch = baseName.match(/(\d+)/g);
+    if (idMatch && idMatch.length > 0) {
+      const id = idMatch[idMatch.length - 1];
+      if (id) {
+        byId.set(id, url);
+      }
+    }
+  });
+
+  return { byFile, byId };
+}
+
+const LOCAL_MAIN_ASSETS = createAssetLookup(LOCAL_MAIN_MUSCLE_MODULES);
+const LOCAL_SECONDARY_ASSETS = createAssetLookup(LOCAL_SECONDARY_MUSCLE_MODULES);
+
+const LOCAL_SILHOUETTE_ASSETS = Object.entries(LOCAL_SILHOUETTE_MODULES).reduce(
+  (acc, [path, url]) => {
+    const fileName = path.split('/').pop()?.toLowerCase() || '';
+    if (!fileName) return acc;
+
+    if (fileName.includes('back')) {
+      acc.back = url;
+    } else if (fileName.includes('front')) {
+      acc.front = url;
+    }
+
+    return acc;
+  },
+  /** @type {{ front?: string; back?: string }} */ ({})
+);
+
 function normalizePath(path = '') {
   if (!path) return '';
   const decoded = decodeURIComponent(path.trim());
@@ -32,6 +98,76 @@ function isAllowedAsset(urlString) {
   }
 }
 
+function normalizeFileKey(value = '') {
+  if (!value) return '';
+
+  let working = value.trim();
+
+  try {
+    if (/^https?:\/\//i.test(working)) {
+      const url = new URL(working);
+      working = url.pathname.split('/').pop() || '';
+    }
+  } catch {
+    // Ignore invalid URL parsing errors.
+  }
+
+  if (!working) {
+    const parts = value.split('/');
+    working = parts[parts.length - 1] || '';
+  }
+
+  working = working.split('#')[0];
+  working = working.split('?')[0];
+
+  return working.toLowerCase();
+}
+
+function resolveLocalMuscleAsset({ lookup, fallbackLookup, fileKey, id }) {
+  const normalizedFileKey = fileKey?.toLowerCase() || '';
+
+  if (normalizedFileKey) {
+    const baseKey = normalizedFileKey.replace(/\.svg$/i, '');
+    const fromFile = lookup.byFile.get(normalizedFileKey) || lookup.byFile.get(baseKey);
+    if (fromFile) return fromFile;
+
+    if (fallbackLookup) {
+      const fallbackFile =
+        fallbackLookup.byFile.get(normalizedFileKey) || fallbackLookup.byFile.get(baseKey);
+      if (fallbackFile) return fallbackFile;
+    }
+  }
+
+  if (Number.isFinite(id)) {
+    const idKey = String(id);
+    const fromId = lookup.byId.get(idKey);
+    if (fromId) return fromId;
+
+    const dashKey = `muscle-${id}`;
+    const underscoreKey = `muscle_${id}`;
+    const fromGuess =
+      lookup.byFile.get(dashKey) ||
+      lookup.byFile.get(`${dashKey}.svg`) ||
+      lookup.byFile.get(underscoreKey) ||
+      lookup.byFile.get(`${underscoreKey}.svg`);
+    if (fromGuess) return fromGuess;
+
+    if (fallbackLookup) {
+      const fallbackId = fallbackLookup.byId.get(idKey);
+      if (fallbackId) return fallbackId;
+
+      const fallbackGuess =
+        fallbackLookup.byFile.get(dashKey) ||
+        fallbackLookup.byFile.get(`${dashKey}.svg`) ||
+        fallbackLookup.byFile.get(underscoreKey) ||
+        fallbackLookup.byFile.get(`${underscoreKey}.svg`);
+      if (fallbackGuess) return fallbackGuess;
+    }
+  }
+
+  return '';
+}
+
 export function buildWgerAssetProxyUrl(path = '') {
   const absoluteUrl = normalizePath(path);
   if (!absoluteUrl || !isAllowedAsset(absoluteUrl)) {
@@ -44,7 +180,33 @@ export function buildWgerAssetProxyUrl(path = '') {
 
 export function getSilhouetteAsset(view = 'front') {
   if (view === 'back') {
-    return buildWgerAssetProxyUrl('/static/images/muscles/muscular_system_back.svg');
+    return (
+      LOCAL_SILHOUETTE_ASSETS.back ||
+      buildWgerAssetProxyUrl('/static/images/muscles/muscular_system_back.svg')
+    );
   }
-  return buildWgerAssetProxyUrl('/static/images/muscles/muscular_system_front.svg');
+
+  return (
+    LOCAL_SILHOUETTE_ASSETS.front ||
+    buildWgerAssetProxyUrl('/static/images/muscles/muscular_system_front.svg')
+  );
+}
+
+export function getMuscleOverlayAssetUrl({ id, variant = 'main', remoteUrl = '' } = {}) {
+  const normalizedId = Number(id);
+  const useSecondary = variant === 'secondary';
+
+  const primaryLookup = useSecondary ? LOCAL_SECONDARY_ASSETS : LOCAL_MAIN_ASSETS;
+  const fallbackLookup = useSecondary ? LOCAL_MAIN_ASSETS : LOCAL_SECONDARY_ASSETS;
+
+  const fileKey = normalizeFileKey(remoteUrl);
+
+  return (
+    resolveLocalMuscleAsset({
+      lookup: primaryLookup,
+      fallbackLookup,
+      fileKey,
+      id: Number.isFinite(normalizedId) ? normalizedId : undefined,
+    }) || ''
+  );
 }

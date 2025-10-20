@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import MuscleSelector from '@/components/workout/MuscleSelector.jsx';
 import { fetchAllMuscles, generateWorkoutPlanFromMuscles } from '@/api/wger.js';
-import { buildWgerAssetProxyUrl } from '@/utils/wgerAssets.js';
+import { buildWgerAssetProxyUrl, getMuscleOverlayAssetUrl } from '@/utils/wgerAssets.js';
 import fallbackMuscleCatalog from '@/data/musclesFallback.json';
 
 const BODY_VIEWS = ['front', 'back'];
@@ -59,9 +59,20 @@ function normalizeMuscleRecords(records) {
 
       const label = record?.name_en || record?.name || `Muscle ${id}`;
       const highlightUrl =
+        getMuscleOverlayAssetUrl({
+          id,
+          variant: 'main',
+          remoteUrl: record?.image_url_main || record?.image_url_secondary || '',
+        }) ||
         buildWgerAssetProxyUrl(record?.image_url_main || record?.image_url_secondary || '') ||
         toAbsoluteAssetUrl(record?.image_url_main || record?.image_url_secondary || '');
       const secondaryUrl =
+        getMuscleOverlayAssetUrl({
+          id,
+          variant: 'secondary',
+          remoteUrl: record?.image_url_secondary || record?.image_url_main || '',
+        }) ||
+        getMuscleOverlayAssetUrl({ id, variant: 'main', remoteUrl: record?.image_url_main || '' }) ||
         buildWgerAssetProxyUrl(record?.image_url_secondary || record?.image_url_main || '') ||
         toAbsoluteAssetUrl(record?.image_url_secondary || '');
       const view = record?.is_front ? 'front' : 'back';
