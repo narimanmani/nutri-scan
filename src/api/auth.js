@@ -1,21 +1,10 @@
+import defaultUsersSeed from '@/data/users.json';
 import { clearSession, readSession, writeSession } from '@/lib/session.js';
 
 const USERS_KEY = 'nutri-scan:users';
 const USER_DATA_VERSION = 1;
-const DEFAULT_USERS = [
-  {
-    username: 'sample_user',
-    displayName: 'Sample User',
-    role: 'user',
-    password: 'sampleUser234!@',
-  },
-  {
-    username: 'admin',
-    displayName: 'Administrator',
-    role: 'admin',
-    password: 'adminNutri!234',
-  },
-];
+const USERS_API_ENDPOINT = '/.netlify/functions/users';
+const DEFAULT_USERS = Array.isArray(defaultUsersSeed) ? defaultUsersSeed : [];
 
 let cachedStorePromise;
 
@@ -66,6 +55,118 @@ function sanitizeDisplayName(value = '', fallback = '') {
   return trimmed.replace(/\s+/g, ' ').replace(/^[a-z]/, (match) => match.toUpperCase());
 }
 
+function toStoreRecord(record, { fallbackCreatedAt = null } = {}) {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+
+  const username = sanitizeUsername(record.username);
+  if (!username) {
+    return null;
+  }
+
+  const passwordHash =
+    typeof record.passwordHash === 'string' && record.passwordHash.trim().length > 0
+      ? record.passwordHash.trim()
+      : '';
+  if (!passwordHash) {
+    return null;
+  }
+
+  const createdAtRaw =
+    typeof record.createdAt === 'string' && record.createdAt.trim().length > 0
+      ? record.createdAt
+      : fallbackCreatedAt || new Date().toISOString();
+  const updatedAtRaw =
+    typeof record.updatedAt === 'string' && record.updatedAt.trim().length > 0
+      ? record.updatedAt
+      : createdAtRaw;
+
+  return {
+    username,
+    displayName: sanitizeDisplayName(record.displayName, username),
+    role: record.role === 'admin' ? 'admin' : 'user',
+    passwordHash,
+    createdAt: createdAtRaw,
+    updatedAt: updatedAtRaw,
+    lastLoginAt:
+      typeof record.lastLoginAt === 'string' && record.lastLoginAt.trim().length > 0
+        ? record.lastLoginAt
+        : null,
+  };
+}
+
+function serializeStore(store) {
+  return Object.entries(store.users || {}).map(([username, record]) => ({
+    username,
+    displayName: record.displayName,
+    role: record.role === 'admin' ? 'admin' : 'user',
+    passwordHash: record.passwordHash,
+    createdAt: record.createdAt || null,
+    updatedAt: record.updatedAt || record.createdAt || null,
+    lastLoginAt: record.lastLoginAt || null,
+  }));
+}
+
+async function fetchUsersFromApi() {
+  if (typeof fetch !== 'function') {
+    return null;
+  }
+
+  try {
+    const response = await fetch(USERS_API_ENDPOINT, {
+      method: 'GET',
+      headers: { 'Cache-Control': 'no-cache' },
+    });
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = await response.json();
+    const candidates = Array.isArray(payload?.users) ? payload.users : payload;
+    if (!Array.isArray(candidates)) {
+      return null;
+    }
+
+    const fetched = candidates
+      .map((candidate) => toStoreRecord(candidate))
+      .filter(Boolean)
+      .reduce(
+        (acc, record) => {
+          acc.users[record.username] = record;
+          return acc;
+        },
+        { version: USER_DATA_VERSION, users: {} },
+      );
+
+    return fetched;
+  } catch (error) {
+    console.warn('Unable to read users from JSON store:', error);
+    return null;
+  }
+}
+
+async function persistUsersToApi(store) {
+  if (typeof fetch !== 'function') {
+    return;
+  }
+
+  const payload = serializeStore(store);
+  if (payload.length === 0) {
+    return;
+  }
+
+  try {
+    await fetch(USERS_API_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ users: payload }),
+    });
+  } catch (error) {
+    console.warn('Unable to persist users to JSON store:', error);
+  }
+}
+
 function readUserStoreRaw() {
   if (!isBrowser()) {
     return { version: USER_DATA_VERSION, users: {} };
@@ -113,19 +214,21 @@ function readUserStoreRaw() {
   }
 }
 
-function writeUserStore(store) {
-  if (!isBrowser()) {
-    return;
+async function writeUserStore(store, { skipRemoteSync = false } = {}) {
+  if (isBrowser()) {
+    const payload = {
+      version: USER_DATA_VERSION,
+      users: Object.fromEntries(
+        Object.entries(store.users || {}).map(([username, record]) => [username, { ...record }]),
+      ),
+    };
+
+    window.localStorage.setItem(USERS_KEY, JSON.stringify(payload));
   }
 
-  const payload = {
-    version: USER_DATA_VERSION,
-    users: Object.fromEntries(
-      Object.entries(store.users || {}).map(([username, record]) => [username, { ...record }]),
-    ),
-  };
-
-  window.localStorage.setItem(USERS_KEY, JSON.stringify(payload));
+  if (!skipRemoteSync) {
+    await persistUsersToApi(store);
+  }
 }
 
 function toPublicUser(record) {
@@ -154,24 +257,27 @@ async function ensureSeedUsers(store) {
       continue;
     }
 
-    if (!nextStore.users[username]) {
-      const now = new Date().toISOString();
-      const passwordHash = await hashPassword(seed.password);
-      nextStore.users[username] = {
-        username,
-        displayName: sanitizeDisplayName(seed.displayName, username),
-        role: seed.role === 'admin' ? 'admin' : 'user',
-        passwordHash,
-        createdAt: now,
-        updatedAt: now,
-        lastLoginAt: null,
-      };
-      didMutate = true;
+    if (nextStore.users[username]) {
+      continue;
     }
+
+    let record = toStoreRecord(seed, { fallbackCreatedAt: new Date().toISOString() });
+
+    if (!record && typeof seed.password === 'string' && seed.password.length > 0) {
+      const passwordHash = await hashPassword(seed.password);
+      record = toStoreRecord({ ...seed, passwordHash }, { fallbackCreatedAt: new Date().toISOString() });
+    }
+
+    if (!record) {
+      continue;
+    }
+
+    nextStore.users[username] = record;
+    didMutate = true;
   }
 
   if (didMutate) {
-    writeUserStore(nextStore);
+    await writeUserStore(nextStore);
   }
 
   return nextStore;
@@ -180,7 +286,14 @@ async function ensureSeedUsers(store) {
 async function loadUserStore() {
   if (!cachedStorePromise) {
     cachedStorePromise = (async () => {
-      const store = readUserStoreRaw();
+      let store = readUserStoreRaw();
+
+      const remoteStore = await fetchUsersFromApi();
+      if (remoteStore) {
+        store = remoteStore;
+        await writeUserStore(store, { skipRemoteSync: true });
+      }
+
       return ensureSeedUsers(store);
     })();
   }
@@ -225,7 +338,7 @@ export async function registerUser({ username, password, displayName }) {
   };
 
   store.users[normalizedUsername] = record;
-  writeUserStore(store);
+  await writeUserStore(store);
 
   const publicUser = toPublicUser(record);
   writeSession({
@@ -260,7 +373,7 @@ export async function loginUser({ username, password }) {
   const now = new Date().toISOString();
   record.lastLoginAt = now;
   record.updatedAt = now;
-  writeUserStore(store);
+  await writeUserStore(store);
 
   const publicUser = toPublicUser(record);
   writeSession({
