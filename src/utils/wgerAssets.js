@@ -2,24 +2,76 @@ const WGER_BASE_URL = 'https://wger.de';
 const WGER_HOSTNAMES = new Set(['wger.de', 'www.wger.de']);
 const ALLOWED_PATH_PREFIXES = ['/static/images/muscles/'];
 
-const LOCAL_SILHOUETTE_ASSETS = {
-  front: new URL('../muscles/muscular_system_front.svg', import.meta.url).href,
-  back: new URL('../muscles/muscular_system_back.svg', import.meta.url).href,
-};
+const SILHOUETTE_MODULES = import.meta.glob('../muscles/**/muscular_system_*.svg', {
+  eager: true,
+  import: 'default',
+});
 
-const SUPPORTED_MUSCLE_IDS = Array.from({ length: 23 }, (_, index) => index + 1);
+const MAIN_MUSCLE_MODULES = import.meta.glob('../muscles/main/muscle-*.svg', {
+  eager: true,
+  import: 'default',
+});
 
-function buildExplicitAssetMap(prefix) {
-  return new Map(
-    SUPPORTED_MUSCLE_IDS.map((id) => [
-      id,
-      new URL(`../muscles/${prefix}/muscle-${id}.svg`, import.meta.url).href,
-    ])
-  );
+const SECONDARY_MUSCLE_MODULES = import.meta.glob('../muscles/secondary/muscle-*.svg', {
+  eager: true,
+  import: 'default',
+});
+
+const ROOT_MUSCLE_MODULES = import.meta.glob('../muscles/muscle-*.svg', {
+  eager: true,
+  import: 'default',
+});
+
+function parseMuscleIdFromPath(path = '') {
+  const match = path.match(/muscle-(\d+)\.svg$/i);
+  if (!match) return null;
+
+  const id = Number(match[1]);
+  return Number.isFinite(id) ? id : null;
 }
 
-const LOCAL_MAIN_ASSETS = buildExplicitAssetMap('main');
-const LOCAL_SECONDARY_ASSETS = buildExplicitAssetMap('secondary');
+function buildAssetMap(primaryModules = {}, fallbackModules = {}) {
+  const map = new Map();
+
+  for (const [path, url] of Object.entries(primaryModules)) {
+    const id = parseMuscleIdFromPath(path);
+    if (id == null || map.has(id)) continue;
+    map.set(id, url);
+  }
+
+  for (const [path, url] of Object.entries(fallbackModules)) {
+    const id = parseMuscleIdFromPath(path);
+    if (id == null || map.has(id)) continue;
+    map.set(id, url);
+  }
+
+  return map;
+}
+
+function resolveSilhouette(view = 'front') {
+  const candidates = [
+    `../muscles/muscular_system_${view}.svg`,
+    `../muscles/main/muscular_system_${view}.svg`,
+    `../muscles/secondary/muscular_system_${view}.svg`,
+  ];
+
+  for (const candidate of candidates) {
+    const asset = SILHOUETTE_MODULES[candidate];
+    if (asset) {
+      return asset;
+    }
+  }
+
+  return '';
+}
+
+const LOCAL_SILHOUETTE_ASSETS = {
+  front: resolveSilhouette('front'),
+  back: resolveSilhouette('back'),
+};
+
+const LOCAL_MAIN_ASSETS = buildAssetMap(MAIN_MUSCLE_MODULES, ROOT_MUSCLE_MODULES);
+const LOCAL_SECONDARY_ASSETS = buildAssetMap(SECONDARY_MUSCLE_MODULES, ROOT_MUSCLE_MODULES);
 
 function normalizePath(path = '') {
   if (!path) return '';
