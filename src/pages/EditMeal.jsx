@@ -5,9 +5,17 @@ import { Meal } from "@/api/entities";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useToast } from "@/components/ui/use-toast";
 import NutritionTable from "@/components/upload/NutritionTable";
 import { ArrowLeft, Loader2, AlertCircle } from "lucide-react";
 import { createPageUrl } from "@/utils";
+
+const TOAST_IDS = {
+  loadError: "edit-meal/load-error",
+  saveSuccess: "edit-meal/save-success",
+  saveError: "edit-meal/save-error",
+  fallbackWarning: "edit-meal/photo-fallback",
+};
 
 function normalizeMealForEditing(meal) {
   if (!meal) {
@@ -32,6 +40,7 @@ function normalizeMealForEditing(meal) {
 export default function EditMealPage() {
   const navigate = useNavigate();
   const { mealId } = useParams();
+  const { toast } = useToast();
   const [meal, setMeal] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -51,13 +60,20 @@ export default function EditMealPage() {
         }
       } catch (loadError) {
         console.error("Failed to load meal for editing:", loadError);
-        setError("Failed to load the meal. Please try again.");
+        const message = "Failed to load the meal. Please try again.";
+        setError(message);
+        toast({
+          id: TOAST_IDS.loadError,
+          title: "Unable to load meal",
+          description: loadError?.message || message,
+          variant: "destructive",
+        });
       }
       setIsLoading(false);
     }
 
     loadMeal();
-  }, [mealId]);
+  }, [mealId, toast]);
 
   const handleSave = async (updatedData) => {
     if (!mealId) return;
@@ -66,14 +82,40 @@ export default function EditMealPage() {
     setError(null);
 
     try {
-      await Meal.update(mealId, updatedData);
+      const result = await Meal.update(mealId, updatedData);
+      toast({
+        id: TOAST_IDS.saveSuccess,
+        title: "Meal updated",
+        description: "Your changes have been saved.",
+      });
+
+      const photoMeta = result?.meta?.photoUpload;
+      if (photoMeta?.didFallback) {
+        const fallbackDescription = photoMeta.errorMessage
+          ? `${photoMeta.errorMessage} We'll keep the photo inline for now.`
+          : "We couldn't reach photo storage, so the updated photo will stay embedded.";
+
+        toast({
+          id: TOAST_IDS.fallbackWarning,
+          title: "Photo stored inline",
+          description: fallbackDescription,
+        });
+      }
+
       navigate(createPageUrl("History"));
     } catch (saveError) {
       console.error("Failed to update meal:", saveError);
-      setError("Failed to update the meal. Please try again.");
+      const message = saveError?.message || "Failed to update the meal. Please try again.";
+      setError(message);
+      toast({
+        id: TOAST_IDS.saveError,
+        title: "Failed to update meal",
+        description: message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsSaving(false);
     }
-
-    setIsSaving(false);
   };
 
   const goBack = () => {

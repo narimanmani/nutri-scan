@@ -4,6 +4,7 @@ import { analyzeMealImage, getDataUrlFromFile } from "@/api/openaiClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useToast } from "@/components/ui/use-toast";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { ArrowLeft, Camera, Upload, Loader2, AlertCircle } from "lucide-react";
@@ -13,8 +14,17 @@ import PhotoUploadZone from "../components/upload/PhotoUploadZone";
 import NutritionTable from "../components/upload/NutritionTable";
 import MealPreview from "../components/upload/MealPreview";
 
+const TOAST_IDS = {
+  uploadError: "upload/photo-error",
+  analyzeError: "upload/analyze-error",
+  saveSuccess: "upload/save-success",
+  saveError: "upload/save-error",
+  fallbackWarning: "upload/photo-fallback",
+};
+
 export default function UploadPage() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [uploadedPhoto, setUploadedPhoto] = useState(null);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -36,6 +46,12 @@ export default function UploadPage() {
       setStep('analyze');
     } catch (error) {
       setError("Failed to process the photo. Please try again.");
+      toast({
+        id: TOAST_IDS.uploadError,
+        title: "Couldn't process photo",
+        description: error?.message || "Failed to process the photo. Please try again.",
+        variant: "destructive",
+      });
       console.error("Upload error:", error);
     }
   };
@@ -62,6 +78,12 @@ export default function UploadPage() {
       setStep('edit');
     } catch (error) {
       setError(error.message || "Failed to analyze the photo. Please try again.");
+      toast({
+        id: TOAST_IDS.analyzeError,
+        title: "Analysis failed",
+        description: error?.message || "Failed to analyze the photo. Please try again.",
+        variant: "destructive",
+      });
       console.error("Analysis error:", error);
     } finally {
       setIsAnalyzing(false);
@@ -79,16 +101,42 @@ export default function UploadPage() {
   const handleSaveMeal = async (mealData) => {
     setIsSaving(true);
     setError(null);
-    
+
     try {
-      await Meal.create(mealData);
+      const result = await Meal.create(mealData);
+      toast({
+        id: TOAST_IDS.saveSuccess,
+        title: "Meal saved",
+        description: "Your meal was added to your dashboard.",
+      });
+
+      const photoMeta = result?.meta?.photoUpload;
+      if (photoMeta?.didFallback) {
+        const fallbackDescription = photoMeta.errorMessage
+          ? `${photoMeta.errorMessage} We'll keep the photo inline for now.`
+          : "We couldn't reach photo storage, so the photo will stay embedded in the log.";
+
+        toast({
+          id: TOAST_IDS.fallbackWarning,
+          title: "Photo stored inline",
+          description: fallbackDescription,
+        });
+      }
+
       navigate(createPageUrl("Dashboard"));
     } catch (error) {
-      setError("Failed to save meal. Please try again.");
+      const message = error?.message || "Failed to save meal. Please try again.";
+      setError(message);
+      toast({
+        id: TOAST_IDS.saveError,
+        title: "Failed to save meal",
+        description: message,
+        variant: "destructive",
+      });
       console.error("Save error:", error);
+    } finally {
+      setIsSaving(false);
     }
-    
-    setIsSaving(false);
   };
 
   const resetUpload = () => {

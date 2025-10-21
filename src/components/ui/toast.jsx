@@ -37,11 +37,17 @@ const toastVariants = cva(
   }
 );
 
-const Toast = React.forwardRef(({ className, variant, ...props }, ref) => {
+const Toast = React.forwardRef(({ className, variant, open = true, ...props }, ref) => {
   return (
     <div
       ref={ref}
-      className={cn(toastVariants({ variant }), className)}
+      data-state={open ? "open" : "closed"}
+      aria-hidden={!open}
+      className={cn(
+        toastVariants({ variant }),
+        !open && "pointer-events-none opacity-0",
+        className
+      )}
       {...props}
     />
   );
@@ -68,6 +74,7 @@ const ToastClose = React.forwardRef(({ className, ...props }, ref) => (
       className
     )}
     toast-close=""
+    type="button"
     {...props}
   >
     <X className="h-4 w-4" />

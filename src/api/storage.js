@@ -188,12 +188,12 @@ function withDefaults(meal, fallbackUserId = DEFAULT_USER_ID) {
 
 async function uploadPhotoIfNeeded(photoUrl) {
   if (typeof photoUrl !== 'string' || photoUrl.length === 0) {
-    return '';
+    return { url: '', didFallback: false, error: null };
   }
 
   // Skip uploads for already hosted images.
   if (!photoUrl.startsWith('data:')) {
-    return photoUrl;
+    return { url: photoUrl, didFallback: false, error: null };
   }
 
   try {
@@ -212,13 +212,44 @@ async function uploadPhotoIfNeeded(photoUrl) {
 
     const payload = await response.json();
     if (payload?.url) {
-      return payload.url;
+      return { url: payload.url, didFallback: false, error: null };
     }
+
+    throw new Error('The photo storage service did not return a URL.');
   } catch (error) {
-    console.warn('Falling back to inline photo URL after Netlify upload error:', error);
+    const normalizedError =
+      error instanceof Error
+        ? error
+        : new Error(typeof error === 'string' ? error : 'Unable to access Netlify Blob storage.');
+    console.warn('Falling back to inline photo URL after Netlify upload error:', normalizedError);
+    return { url: photoUrl, didFallback: true, error: normalizedError };
+  }
+}
+
+function buildPhotoUploadMeta(uploadResult) {
+  if (!uploadResult || typeof uploadResult !== 'object') {
+    return {
+      didFallback: false,
+      errorMessage: '',
+      source: 'netlify-blob-storage',
+      timestamp: new Date().toISOString(),
+    };
   }
 
-  return photoUrl;
+  const { didFallback = false, error } = uploadResult;
+  const errorMessage =
+    error && typeof error.message === 'string' && error.message.trim().length > 0
+      ? error.message.trim()
+      : didFallback
+        ? 'Unable to access Netlify Blob storage.'
+        : '';
+
+  return {
+    didFallback: Boolean(didFallback),
+    errorMessage,
+    source: 'netlify-blob-storage',
+    timestamp: new Date().toISOString(),
+  };
 }
 
 function cloneIngredients(ingredients) {
@@ -940,7 +971,8 @@ export async function createMeal(meal) {
   const normalizedUserId = normalizeUserId(userId);
   ensureMealBucket(store, normalizedUserId);
 
-  const storedPhotoUrl = await uploadPhotoIfNeeded(meal.photo_url);
+  const uploadResult = await uploadPhotoIfNeeded(meal.photo_url);
+  const storedPhotoUrl = uploadResult.url;
   const newMeal = withDefaults(
     {
       ...meal,
@@ -955,7 +987,12 @@ export async function createMeal(meal) {
   store.users[normalizedUserId].unshift(newMeal);
   writeMealStoreToLocalStorage(store);
   notifyMealListeners();
-  return cloneMeal(newMeal);
+  return {
+    meal: cloneMeal(newMeal),
+    meta: {
+      photoUpload: buildPhotoUploadMeta(uploadResult),
+    },
+  };
 }
 
 export async function getMealById(id) {
@@ -1005,7 +1042,8 @@ export async function updateMeal(id, updates = {}) {
     typeof updates.photo_url === 'string' && updates.photo_url.length > 0
       ? updates.photo_url
       : existing.photo_url;
-  const storedPhotoUrl = await uploadPhotoIfNeeded(nextPhotoSource);
+  const uploadResult = await uploadPhotoIfNeeded(nextPhotoSource);
+  const storedPhotoUrl = uploadResult.url;
 
   const requestedUserId = updates.userId ? normalizeUserId(updates.userId) : record.userId;
   if (requestedUserId !== record.userId && !isAdmin) {
@@ -1035,7 +1073,12 @@ export async function updateMeal(id, updates = {}) {
 
   writeMealStoreToLocalStorage(store);
   notifyMealListeners();
-  return cloneMeal(updatedMeal);
+  return {
+    meal: cloneMeal(updatedMeal),
+    meta: {
+      photoUpload: buildPhotoUploadMeta(uploadResult),
+    },
+  };
 }
 
 export async function clearMeals() {
