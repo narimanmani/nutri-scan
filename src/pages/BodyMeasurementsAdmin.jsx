@@ -7,6 +7,7 @@ import {
   loadDefaultMeasurementOverride,
   loadMeasurementPositions,
   mergeFieldsWithPositions,
+  normalizeMeasurementPositions,
   saveDefaultMeasurementPositions,
   saveMeasurementPositions,
 } from "@/utils/bodyMeasurementLayout.js";
@@ -32,6 +33,8 @@ export default function BodyMeasurementsAdmin() {
   const [hasCustomDefault, setHasCustomDefault] = useState(() => Boolean(loadDefaultMeasurementOverride()));
   const [registeredUsers, setRegisteredUsers] = useState([]);
   const [userError, setUserError] = useState("");
+  const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
+  const [uploadFeedback, setUploadFeedback] = useState({ type: "info", message: "" });
 
   const measurementFields = useMemo(
     () => mergeFieldsWithPositions(DEFAULT_MEASUREMENT_FIELDS, positions),
@@ -193,6 +196,62 @@ export default function BodyMeasurementsAdmin() {
     setStatusMessage("Current layout saved as the new default for this device.");
   };
 
+  const handleDownloadLayout = () => {
+    try {
+      const normalized = normalizeMeasurementPositions(positions);
+      const blob = new Blob([JSON.stringify(normalized, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "body-measurement-layout.json";
+      anchor.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 0);
+    } catch (error) {
+      console.error("Failed to download layout", error);
+      setStatusMessage("Unable to download the layout file. Please try again.");
+    }
+  };
+
+  const handleUploadDialogOpen = () => {
+    setUploadFeedback({ type: "info", message: "" });
+    setIsUploadDialogOpen(true);
+  };
+
+  const handleUploadDialogClose = () => {
+    setIsUploadDialogOpen(false);
+    setUploadFeedback({ type: "info", message: "" });
+  };
+
+  const handleLayoutFileSelection = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const fileContents = await file.text();
+      const parsed = JSON.parse(fileContents);
+      const normalized = normalizeMeasurementPositions(parsed);
+      setPositions(normalized);
+      saveMeasurementPositions(normalized);
+      setIsDirty(false);
+      setStatusMessage("Layout imported and saved successfully.");
+      handleUploadDialogClose();
+    } catch (error) {
+      console.error("Unable to import layout", error);
+      setUploadFeedback({
+        type: "error",
+        message: "Unable to read the selected file. Ensure it is a valid layout JSON export.",
+      });
+    } finally {
+      event.target.value = "";
+    }
+  };
+
   return (
     <div className="mx-auto max-w-6xl space-y-8 px-4 py-10">
       <header className="space-y-3">
@@ -283,6 +342,20 @@ export default function BodyMeasurementsAdmin() {
                   className="rounded-full border border-emerald-200 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-wide text-emerald-600 hover:border-emerald-300 hover:text-emerald-700"
                 >
                   Reset to defaults
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadLayout}
+                  className="rounded-full border border-emerald-200 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-wide text-emerald-600 hover:border-emerald-300 hover:text-emerald-700"
+                >
+                  Download layout
+                </button>
+                <button
+                  type="button"
+                  onClick={handleUploadDialogOpen}
+                  className="rounded-full border border-emerald-300 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-wide text-emerald-700 shadow-sm hover:border-emerald-400 hover:bg-emerald-50"
+                >
+                  Import layout
                 </button>
                 <button
                   type="button"
@@ -412,6 +485,47 @@ export default function BodyMeasurementsAdmin() {
           </div>
         </section>
       </div>
+
+      {isUploadDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-emerald-950/40 px-4 py-6">
+          <div className="w-full max-w-lg space-y-5 rounded-3xl border border-emerald-100 bg-white p-6 shadow-xl shadow-emerald-900/10">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-semibold text-emerald-900">Import layout from JSON</h2>
+                <p className="mt-1 text-sm text-emerald-800/80">
+                  Upload a layout file that was previously exported from this admin screen to instantly apply it for this device.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleUploadDialogClose}
+                className="rounded-full border border-emerald-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-700 hover:border-emerald-300 hover:text-emerald-800"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="space-y-3 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4 text-sm text-emerald-800">
+              <p>Select a JSON file that matches the exported layout format.</p>
+              <input
+                type="file"
+                accept="application/json"
+                onChange={handleLayoutFileSelection}
+                className="w-full text-sm text-emerald-800"
+              />
+              {uploadFeedback.message ? (
+                <p
+                  className={`text-xs font-semibold ${
+                    uploadFeedback.type === "error" ? "text-red-600" : "text-emerald-700"
+                  }`}
+                >
+                  {uploadFeedback.message}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
