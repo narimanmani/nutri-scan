@@ -7,7 +7,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/components/ui/use-toast';
 
 import DateNavigator from '@/components/dashboard/DateNavigator';
@@ -228,9 +227,8 @@ export default function DietPlans() {
                 </div>
               </CardHeader>
               <CardContent className="p-0">
-                <ScrollArea className="max-h-[360px] px-6 py-4">
-                  <div className="space-y-3">
-                    {plans.map((plan) => {
+                <div className="space-y-3 px-6 py-4">
+                  {plans.map((plan) => {
                       const isSelected = selectedPlan?.id === plan.id;
                       return (
                         <button
@@ -258,13 +256,12 @@ export default function DietPlans() {
                         </button>
                       );
                     })}
-                    {plans.length === 0 && !isLoading && (
-                      <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-6 text-center text-sm text-gray-500">
-                        No plans yet. Create one to get started.
-                      </div>
-                    )}
-                  </div>
-                </ScrollArea>
+                  {plans.length === 0 && !isLoading && (
+                    <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-6 text-center text-sm text-gray-500">
+                      No plans yet. Create one to get started.
+                    </div>
+                  )}
+                </div>
               </CardContent>
             </Card>
 
