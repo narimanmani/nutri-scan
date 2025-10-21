@@ -1,1 +1,7 @@
-Forbidden
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 900" fill="none">
+  <rect width="400" height="900" fill="none" />
+  <g fill="#a7f3d0">
+    <ellipse cx="145" cy="790" rx="20" ry="45" />
+    <ellipse cx="255" cy="790" rx="20" ry="45" />
+  </g>
+</svg>

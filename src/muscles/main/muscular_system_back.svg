@@ -1,1 +1,29 @@
-Forbidden
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 900" fill="none">
+  <defs>
+    <linearGradient id="silhouetteBackGradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e3f2fd" />
+      <stop offset="65%" stop-color="#c9def5" />
+      <stop offset="100%" stop-color="#b3cfe9" />
+    </linearGradient>
+  </defs>
+  <rect width="400" height="900" fill="none" />
+  <g fill="url(#silhouetteBackGradient)">
+    <circle cx="200" cy="85" r="70" />
+    <rect x="170" y="140" width="60" height="70" rx="25" ry="25" />
+    <rect x="120" y="190" width="160" height="190" rx="80" ry="90" />
+    <rect x="130" y="360" width="140" height="170" rx="70" ry="70" />
+    <rect x="150" y="520" width="100" height="140" rx="50" ry="50" />
+    <rect x="60" y="220" width="55" height="220" rx="28" ry="28" />
+    <rect x="285" y="220" width="55" height="220" rx="28" ry="28" />
+    <rect x="40" y="420" width="60" height="200" rx="28" ry="28" />
+    <rect x="300" y="420" width="60" height="200" rx="28" ry="28" />
+    <rect x="110" y="540" width="70" height="220" rx="35" ry="35" />
+    <rect x="220" y="540" width="70" height="220" rx="35" ry="35" />
+    <rect x="110" y="720" width="70" height="160" rx="32" ry="32" />
+    <rect x="220" y="720" width="70" height="160" rx="32" ry="32" />
+  </g>
+  <g fill="#ffffff" fill-opacity="0.16">
+    <path d="M150 230 C130 300 130 360 150 430 L250 430 C270 360 270 300 250 230 Z" />
+    <path d="M160 520 C150 600 150 650 170 720 L230 720 C250 650 250 600 240 520 Z" />
+  </g>
+</svg>

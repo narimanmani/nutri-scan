@@ -1,1 +1,6 @@
-Forbidden
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 900" fill="none">
+  <rect width="400" height="900" fill="none" />
+  <g fill="#a7f3d0">
+    <path d="M150 480 C130 520 130 570 150 610 L250 610 C270 570 270 520 250 480 Z" />
+  </g>
+</svg>
