@@ -5,21 +5,25 @@ const ALLOWED_PATH_PREFIXES = ['/static/images/muscles/'];
 const SILHOUETTE_MODULES = import.meta.glob('../muscles/**/muscular_system_*.svg', {
   eager: true,
   import: 'default',
+  query: '?url',
 });
 
 const MAIN_MUSCLE_MODULES = import.meta.glob('../muscles/main/muscle-*.svg', {
   eager: true,
   import: 'default',
+  query: '?url',
 });
 
 const SECONDARY_MUSCLE_MODULES = import.meta.glob('../muscles/secondary/muscle-*.svg', {
   eager: true,
   import: 'default',
+  query: '?url',
 });
 
 const ROOT_MUSCLE_MODULES = import.meta.glob('../muscles/muscle-*.svg', {
   eager: true,
   import: 'default',
+  query: '?url',
 });
 
 function parseMuscleIdFromPath(path = '') {
@@ -35,13 +39,13 @@ function buildAssetMap(primaryModules = {}, fallbackModules = {}) {
 
   for (const [path, url] of Object.entries(primaryModules)) {
     const id = parseMuscleIdFromPath(path);
-    if (id == null || map.has(id)) continue;
+    if (id == null || map.has(id) || !url) continue;
     map.set(id, url);
   }
 
   for (const [path, url] of Object.entries(fallbackModules)) {
     const id = parseMuscleIdFromPath(path);
-    if (id == null || map.has(id)) continue;
+    if (id == null || map.has(id) || !url) continue;
     map.set(id, url);
   }
 
