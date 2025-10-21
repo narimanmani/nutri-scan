@@ -1,5 +1,5 @@
 // Inspired by react-hot-toast library
-import { useState, useEffect, createContext, useContext } from "react";
+import { useState, useEffect } from "react";
 
 const TOAST_LIMIT = 20;
 const TOAST_REMOVE_DELAY = 1000;
@@ -54,6 +54,13 @@ const scheduleAutoDismiss = (toastId, duration) => {
   clearAutoDismiss(toastId);
 
   const timeout = setTimeout(() => {
+    toastAutoDismissTimeouts.delete(toastId);
+
+    const toastState = memoryState.toasts.find((toast) => toast.id === toastId);
+    if (!toastState || toastState.open === false) {
+      return;
+    }
+
     dispatch({ type: actionTypes.DISMISS_TOAST, toastId });
   }, duration);
 
@@ -79,13 +86,26 @@ export const reducer = (state, action) => {
     case actionTypes.DISMISS_TOAST: {
       const { toastId } = action;
 
+      const dismissTarget = toastId
+        ? state.toasts.filter((toast) => toast.id === toastId)
+        : state.toasts;
+
+      if (dismissTarget.length === 0) {
+        return state;
+      }
+
       // ! Side effects ! - This could be extracted into a dismissToast() action,
       // but I'll keep it here for simplicity
       if (toastId) {
         clearAutoDismiss(toastId);
         addToRemoveQueue(toastId);
+
+        const toastIsOpen = dismissTarget[0]?.open !== false;
+        if (!toastIsOpen) {
+          return state;
+        }
       } else {
-        state.toasts.forEach((toast) => {
+        dismissTarget.forEach((toast) => {
           clearAutoDismiss(toast.id);
           addToRemoveQueue(toast.id);
         });
