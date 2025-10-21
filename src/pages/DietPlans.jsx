@@ -50,6 +50,14 @@ function ensureArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+const TOAST_IDS = {
+  loadError: 'diet-plans/load-error',
+  createSuccess: 'diet-plans/create-success',
+  createError: 'diet-plans/create-error',
+  activateSuccess: 'diet-plans/activate-success',
+  activateError: 'diet-plans/activate-error',
+};
+
 export default function DietPlans() {
   const { toast } = useToast();
   const [plans, setPlans] = useState([]);
@@ -88,6 +96,7 @@ export default function DietPlans() {
       } catch (error) {
         console.error('Failed to load plans or meals', error);
         toast({
+          id: TOAST_IDS.loadError,
           title: 'Unable to load diet data',
           description: error.message || 'Please refresh to try again.',
           variant: 'destructive',
@@ -153,12 +162,14 @@ export default function DietPlans() {
       setActivePlan(active);
       setSelectedPlanId(saved?.id || active?.id || planList[0]?.id || null);
       toast({
+        id: TOAST_IDS.createSuccess,
         title: 'Plan saved',
         description: `${saved?.name || newPlan.name} was added to your plans.`,
       });
     } catch (error) {
       console.error('Failed to save plan', error);
       toast({
+        id: TOAST_IDS.createError,
         title: 'Unable to save plan',
         description: error.message || 'Please try again.',
         variant: 'destructive',
@@ -175,12 +186,14 @@ export default function DietPlans() {
       setActivePlan(updated);
       setSelectedPlanId(updated?.id || planId);
       toast({
+        id: TOAST_IDS.activateSuccess,
         title: 'Active plan updated',
         description: `${updated?.name || 'Selected plan'} is now active.`,
       });
     } catch (error) {
       console.error('Unable to set active plan', error);
       toast({
+        id: TOAST_IDS.activateError,
         title: 'Unable to set active plan',
         description: error.message || 'Please try again.',
         variant: 'destructive',

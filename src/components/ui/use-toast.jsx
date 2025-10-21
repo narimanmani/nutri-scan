@@ -127,35 +127,51 @@ function dispatch(action) {
   });
 }
 
-function toast({ ...props }) {
-  const id = genId();
+function toast({ id: providedId, ...props }) {
+  const id = providedId ?? genId();
 
   const duration =
     typeof props.duration === "number" ? props.duration : DEFAULT_TOAST_DURATION;
-
-  const update = (props) =>
-    dispatch({
-      type: actionTypes.UPDATE_TOAST,
-      toast: { ...props, id },
-    });
 
   const dismiss = () => {
     dispatch({ type: actionTypes.DISMISS_TOAST, toastId: id });
   };
 
-  dispatch({
-    type: actionTypes.ADD_TOAST,
-    toast: {
-      ...props,
-      id,
-      duration,
-      open: true,
-      onOpenChange: (open) => {
-        if (!open) dismiss();
-      },
-      dismiss,
+  const toastState = {
+    ...props,
+    id,
+    duration,
+    open: true,
+    onOpenChange: (open) => {
+      if (!open) dismiss();
     },
-  });
+    dismiss,
+  };
+
+  const existingToast = memoryState.toasts.find((item) => item.id === id);
+
+  if (existingToast) {
+    clearFromRemoveQueue(id);
+
+    dispatch({
+      type: actionTypes.UPDATE_TOAST,
+      toast: {
+        ...existingToast,
+        ...toastState,
+      },
+    });
+  } else {
+    dispatch({
+      type: actionTypes.ADD_TOAST,
+      toast: toastState,
+    });
+  }
+
+  const update = (nextProps) =>
+    dispatch({
+      type: actionTypes.UPDATE_TOAST,
+      toast: { ...nextProps, id },
+    });
 
   return {
     id,
@@ -175,7 +191,7 @@ function useToast() {
         listeners.splice(index, 1);
       }
     };
-  }, [state]);
+  }, []);
 
   return {
     ...state,
