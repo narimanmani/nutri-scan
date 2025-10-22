@@ -3,7 +3,7 @@
     "username": "sample_user",
     "displayName": "Sample User",
     "role": "user",
-    "passwordHash": "18c145f24edd5a8ae219e9edcf7152082c320588d123967ad88c6277b160b4a7",
+    "passwordHash": "fac06b529c6df3c78acbc2ffba062e60159996fb8a9508a07b91f1f879f89b56",
     "createdAt": "2024-01-01T00:00:00.000Z",
     "updatedAt": "2024-01-01T00:00:00.000Z",
     "lastLoginAt": null
