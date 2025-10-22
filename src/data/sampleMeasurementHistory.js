@@ -1,6 +1,7 @@
 export const SAMPLE_MEASUREMENT_HISTORY = [
   {
     id: "sample-apple",
+    userId: "sample_user",
     label: "Apple Shape",
     source: "Sample",
     recordedAt: "2024-02-01T08:00:00.000Z",
@@ -14,6 +15,7 @@ export const SAMPLE_MEASUREMENT_HISTORY = [
   },
   {
     id: "sample-pear",
+    userId: "sample_user",
     label: "Pear Shape",
     source: "Sample",
     recordedAt: "2024-02-08T08:00:00.000Z",
@@ -27,6 +29,7 @@ export const SAMPLE_MEASUREMENT_HISTORY = [
   },
   {
     id: "sample-hourglass",
+    userId: "sample_user",
     label: "Hourglass Shape",
     source: "Sample",
     recordedAt: "2024-02-15T08:00:00.000Z",
@@ -40,6 +43,7 @@ export const SAMPLE_MEASUREMENT_HISTORY = [
   },
   {
     id: "sample-rectangle",
+    userId: "sample_user",
     label: "Rectangle Shape",
     source: "Sample",
     recordedAt: "2024-02-22T08:00:00.000Z",
@@ -53,6 +57,7 @@ export const SAMPLE_MEASUREMENT_HISTORY = [
   },
   {
     id: "sample-inverted-triangle",
+    userId: "sample_user",
     label: "Inverted Triangle",
     source: "Sample",
     recordedAt: "2024-03-01T08:00:00.000Z",
@@ -66,6 +71,7 @@ export const SAMPLE_MEASUREMENT_HISTORY = [
   },
   {
     id: "sample-endomorph",
+    userId: "sample_user",
     label: "Simplified Endomorph",
     source: "Sample",
     recordedAt: "2024-03-08T08:00:00.000Z",
@@ -79,6 +85,7 @@ export const SAMPLE_MEASUREMENT_HISTORY = [
   },
   {
     id: "sample-mesomorph",
+    userId: "sample_user",
     label: "Simplified Mesomorph",
     source: "Sample",
     recordedAt: "2024-03-15T08:00:00.000Z",
@@ -100,6 +107,7 @@ export const SAMPLE_MEASUREMENT_HISTORY = [
   },
   {
     id: "sample-ectomorph",
+    userId: "sample_user",
     label: "Simplified Ectomorph",
     source: "Sample",
     recordedAt: "2024-03-22T08:00:00.000Z",
