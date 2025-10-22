@@ -426,6 +426,16 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
     });
   }, [editedData.ingredients, selectedSuggestions]);
 
+  const getSuggestionState = (ingredientId) => {
+    return {
+      suggestionsForIngredient: ingredientSuggestions[ingredientId] || [],
+      isFetchingSuggestions: Boolean(suggestionsLoading[ingredientId]),
+      hasFetchedSuggestions: Boolean(suggestionsFetched[ingredientId]),
+      suggestionError: suggestionsError[ingredientId],
+      selectedSuggestion: selectedSuggestions[ingredientId],
+    };
+  };
+
   const handleBasicFieldChange = (field, value) => {
     setEditedData((prev) => ({
       ...prev,
@@ -635,98 +645,101 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
           </p>
         </CardHeader>
         <CardContent className="p-0">
-          <div className="overflow-x-auto overflow-y-visible">
-            <table className="min-w-full divide-y divide-gray-100 text-sm">
-              <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
-                <tr>
-                  <th className="px-6 py-3 text-left w-[22rem]">Ingredient</th>
-                  <th className="px-4 py-3 text-left w-32">Amount</th>
-                  <th className="px-4 py-3 text-left w-36">Unit</th>
-                  <th className="px-4 py-3 text-left w-28">Calories</th>
-                  <th className="px-4 py-3 text-left w-28">Protein (g)</th>
-                  <th className="px-4 py-3 text-left w-28">Carbs (g)</th>
-                  <th className="px-4 py-3 text-left w-28">Fat (g)</th>
-                  <th className="px-4 py-3 text-right w-24">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100 bg-white">
-                {(editedData.ingredients || []).map((ingredient) => {
-                  const suggestionsForIngredient = ingredientSuggestions[ingredient.id] || [];
-                  const isFetchingSuggestions = Boolean(suggestionsLoading[ingredient.id]);
-                  const hasFetchedSuggestions = Boolean(suggestionsFetched[ingredient.id]);
-                  const suggestionError = suggestionsError[ingredient.id];
-                  const selectedSuggestion = selectedSuggestions[ingredient.id];
-                  const shouldShowSuggestions = isFetchingSuggestions || hasFetchedSuggestions;
+          <div className="hidden md:block">
+            <div className="overflow-x-auto overflow-y-visible">
+              <table className="min-w-full divide-y divide-gray-100 text-sm">
+                <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                  <tr>
+                    <th className="px-6 py-3 text-left w-[22rem]">Ingredient</th>
+                    <th className="px-4 py-3 text-left w-32">Amount</th>
+                    <th className="px-4 py-3 text-left w-36">Unit</th>
+                    <th className="px-4 py-3 text-left w-28">Calories</th>
+                    <th className="px-4 py-3 text-left w-28">Protein (g)</th>
+                    <th className="px-4 py-3 text-left w-28">Carbs (g)</th>
+                    <th className="px-4 py-3 text-left w-28">Fat (g)</th>
+                    <th className="px-4 py-3 text-right w-24">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 bg-white">
+                  {(editedData.ingredients || []).map((ingredient) => {
+                    const {
+                      suggestionsForIngredient,
+                      isFetchingSuggestions,
+                      hasFetchedSuggestions,
+                      suggestionError,
+                      selectedSuggestion,
+                    } = getSuggestionState(ingredient.id);
+                    const shouldShowSuggestions = isFetchingSuggestions || hasFetchedSuggestions;
 
-                  return (
-                    <React.Fragment key={ingredient.id}>
-                      <tr>
-                        <td className="px-6 py-4 align-top relative w-[22rem]">
-                          <div className="relative">
-                            <Input
-                              value={ingredient.name}
-                              onChange={(event) => handleIngredientNameInput(ingredient.id, event.target.value)}
-                              placeholder="e.g. Grilled chicken"
-                              className="w-full rounded-xl border-gray-200 pr-10"
-                            />
-                            {isFetchingSuggestions && (
-                              <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-gray-400" />
-                            )}
-                            {shouldShowSuggestions && (
-                              <div className="absolute left-0 right-0 bottom-full z-30 mb-2 max-h-64 min-w-[20rem] overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-xl">
-                                {suggestionsForIngredient.length === 0 ? (
-                                  <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-500">
-                                    {isFetchingSuggestions ? (
-                                      <>
-                                        <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
-                                        <span>Fetching suggestions…</span>
-                                      </>
-                                    ) : suggestionError ? (
-                                      <span>{suggestionError}</span>
-                                    ) : (
-                                      <span>No suggestions found</span>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <ul className="divide-y divide-gray-100">
-                                    {suggestionsForIngredient.map((suggestion) => (
-                                      <li key={`${ingredient.id}-${suggestion.id || suggestion.name}`}>
-                                        <button
-                                          type="button"
-                                          className="block w-full px-4 py-3 text-left hover:bg-gray-50"
-                                          onClick={() => handleSuggestionSelect(ingredient.id, suggestion)}
-                                        >
-                                          <div className="font-medium text-gray-900">{suggestion.name}</div>
-                                          {suggestion.description && (
-                                            <div className="text-xs text-gray-500 mt-1">{suggestion.description}</div>
-                                          )}
-                                          {suggestion.example_portion && (
-                                            <div className="text-xs text-gray-400 mt-1">
-                                              Example: {suggestion.example_portion}
-                                            </div>
-                                          )}
-                                          {suggestion.data_source && (
-                                            <div className="text-[10px] uppercase tracking-wide text-gray-300 mt-2">
-                                              {suggestion.data_source === 'openai'
-                                                ? 'AI suggestion'
-                                                : suggestion.data_source === 'fallback'
-                                                  ? 'Reference library'
-                                                  : suggestion.data_source === 'usda'
-                                                    ? 'USDA database'
-                                                    : 'Suggested value'}
-                                            </div>
-                                          )}
-                                        </button>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                          <p className="text-xs text-gray-400 mt-2">
-                            {formatUnitLabel(ingredient.unit)} detected
-                          </p>
+                    return (
+                      <React.Fragment key={ingredient.id}>
+                        <tr>
+                          <td className="px-6 py-4 align-top relative w-[22rem]">
+                            <div className="relative">
+                              <Input
+                                value={ingredient.name}
+                                onChange={(event) => handleIngredientNameInput(ingredient.id, event.target.value)}
+                                placeholder="e.g. Grilled chicken"
+                                className="w-full rounded-xl border-gray-200 pr-10"
+                              />
+                              {isFetchingSuggestions && (
+                                <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-gray-400" />
+                              )}
+                              {shouldShowSuggestions && (
+                                <div className="absolute left-0 right-0 bottom-full z-30 mb-2 max-h-64 min-w-[20rem] overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-xl">
+                                  {suggestionsForIngredient.length === 0 ? (
+                                    <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-500">
+                                      {isFetchingSuggestions ? (
+                                        <>
+                                          <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                                          <span>Fetching suggestions…</span>
+                                        </>
+                                      ) : suggestionError ? (
+                                        <span>{suggestionError}</span>
+                                      ) : (
+                                        <span>No suggestions found</span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <ul className="divide-y divide-gray-100">
+                                      {suggestionsForIngredient.map((suggestion) => (
+                                        <li key={`${ingredient.id}-${suggestion.id || suggestion.name}`}>
+                                          <button
+                                            type="button"
+                                            className="block w-full px-4 py-3 text-left hover:bg-gray-50"
+                                            onClick={() => handleSuggestionSelect(ingredient.id, suggestion)}
+                                          >
+                                            <div className="font-medium text-gray-900">{suggestion.name}</div>
+                                            {suggestion.description && (
+                                              <div className="text-xs text-gray-500 mt-1">{suggestion.description}</div>
+                                            )}
+                                            {suggestion.example_portion && (
+                                              <div className="text-xs text-gray-400 mt-1">
+                                                Example: {suggestion.example_portion}
+                                              </div>
+                                            )}
+                                            {suggestion.data_source && (
+                                              <div className="text-[10px] uppercase tracking-wide text-gray-300 mt-2">
+                                                {suggestion.data_source === 'openai'
+                                                  ? 'AI suggestion'
+                                                  : suggestion.data_source === 'fallback'
+                                                    ? 'Reference library'
+                                                    : suggestion.data_source === 'usda'
+                                                      ? 'USDA database'
+                                                      : 'Suggested value'}
+                                              </div>
+                                            )}
+                                          </button>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            <p className="text-xs text-gray-400 mt-2">
+                              {formatUnitLabel(ingredient.unit)} detected
+                            </p>
                             {selectedSuggestion && (
                               <p className="text-xs text-emerald-600 mt-1">
                                 {selectedSuggestion.data_source === 'openai'
@@ -736,145 +749,384 @@ export default function NutritionTable({ initialData, onSave, onCancel, isSaving
                                     : 'Suggested value'}: {selectedSuggestion.name}
                               </p>
                             )}
-                        </td>
-                        <td className="px-4 py-4 align-top">
-                          <Input
-                            type="number"
-                            min="0"
-                            step="1"
-                            value={ingredient.amount}
-                            onChange={(event) => handleIngredientChange(ingredient.id, 'amount', event.target.value)}
-                            className="rounded-xl border-gray-200"
-                          />
-                        </td>
-                        <td className="px-4 py-4 align-top">
-                          <Select
-                            value={ingredient.unit}
-                            onValueChange={(value) => handleIngredientChange(ingredient.id, 'unit', value)}
-                          >
-                            <SelectTrigger className="rounded-xl border-gray-200">
-                              <SelectValue placeholder="Select unit" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {UNIT_OPTIONS.map((option) => (
-                                <SelectItem key={option.value} value={option.value}>
-                                  {option.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </td>
-                        <td className="px-4 py-4 align-top">
-                          <div className="flex items-center gap-2">
+                          </td>
+                          <td className="px-4 py-4 align-top">
                             <Input
                               type="number"
                               min="0"
                               step="1"
-                              value={ingredient.calories}
-                              onChange={(event) => handleIngredientChange(ingredient.id, 'calories', event.target.value)}
+                              value={ingredient.amount}
+                              onChange={(event) => handleIngredientChange(ingredient.id, 'amount', event.target.value)}
                               className="rounded-xl border-gray-200"
                             />
-                            {estimateLoading[ingredient.id] && (
-                              <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-4 py-4 align-top">
-                          <Input
-                            type="number"
-                            min="0"
-                            step="0.1"
-                            value={ingredient.protein}
-                            onChange={(event) => handleIngredientChange(ingredient.id, 'protein', event.target.value)}
-                            className="rounded-xl border-gray-200"
-                          />
-                        </td>
-                        <td className="px-4 py-4 align-top">
-                          <Input
-                            type="number"
-                            min="0"
-                            step="0.1"
-                            value={ingredient.carbs}
-                            onChange={(event) => handleIngredientChange(ingredient.id, 'carbs', event.target.value)}
-                            className="rounded-xl border-gray-200"
-                          />
-                        </td>
-                        <td className="px-4 py-4 align-top">
-                          <Input
-                            type="number"
-                            min="0"
-                            step="0.1"
-                            value={ingredient.fat}
-                            onChange={(event) => handleIngredientChange(ingredient.id, 'fat', event.target.value)}
-                            className="rounded-xl border-gray-200"
-                          />
-                        </td>
-                        <td className="px-4 py-4 align-top">
-                          <div className="flex items-center justify-end gap-2">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="icon"
-                              className="h-9 w-9 rounded-xl border-gray-200"
-                              onClick={() =>
-                                setExpandedIngredientId((prev) =>
-                                  prev === ingredient.id ? null : ingredient.id
-                                )
-                              }
+                          </td>
+                          <td className="px-4 py-4 align-top">
+                            <Select
+                              value={ingredient.unit}
+                              onValueChange={(value) => handleIngredientChange(ingredient.id, 'unit', value)}
                             >
-                              {expandedIngredientId === ingredient.id ? (
-                                <ChevronUp className="h-4 w-4" />
-                              ) : (
-                                <ChevronDown className="h-4 w-4" />
-                              )}
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="destructive"
-                              size="icon"
-                              className="h-9 w-9 rounded-xl"
-                              onClick={() => handleRemoveIngredient(ingredient.id)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                      {expandedIngredientId === ingredient.id && (
-                        <tr>
-                          <td colSpan={8} className="px-6 pb-6">
-                            <div className="mt-2 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
-                              <p className="text-sm font-medium text-emerald-800">
-                                Micronutrients
-                              </p>
-                              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                                {MICRO_NUTRIENTS.map((field) => (
-                                  <div key={field} className="space-y-1">
-                                    <Label className="text-xs font-medium text-emerald-900">
-                                      {nutritionFields.find((item) => item.key === field)?.label}
-                                    </Label>
-                                    <Input
-                                      type="number"
-                                      min="0"
-                                      step={field === 'sodium' || field === 'potassium' || field === 'calcium' ? '1' : '0.1'}
-                                      value={ingredient[field]}
-                                      onChange={(event) =>
-                                        handleIngredientChange(ingredient.id, field, event.target.value)
-                                      }
-                                      className="rounded-xl border-emerald-100 bg-white/70 focus:border-emerald-300 focus:ring-emerald-200"
-                                    />
-                                  </div>
+                              <SelectTrigger className="rounded-xl border-gray-200">
+                                <SelectValue placeholder="Select unit" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {UNIT_OPTIONS.map((option) => (
+                                  <SelectItem key={option.value} value={option.value}>
+                                    {option.label}
+                                  </SelectItem>
                                 ))}
-                              </div>
+                              </SelectContent>
+                            </Select>
+                          </td>
+                          <td className="px-4 py-4 align-top">
+                            <div className="flex items-center gap-2">
+                              <Input
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={ingredient.calories}
+                                onChange={(event) => handleIngredientChange(ingredient.id, 'calories', event.target.value)}
+                                className="rounded-xl border-gray-200"
+                              />
+                              {estimateLoading[ingredient.id] && (
+                                <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 align-top">
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.1"
+                              value={ingredient.protein}
+                              onChange={(event) => handleIngredientChange(ingredient.id, 'protein', event.target.value)}
+                              className="rounded-xl border-gray-200"
+                            />
+                          </td>
+                          <td className="px-4 py-4 align-top">
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.1"
+                              value={ingredient.carbs}
+                              onChange={(event) => handleIngredientChange(ingredient.id, 'carbs', event.target.value)}
+                              className="rounded-xl border-gray-200"
+                            />
+                          </td>
+                          <td className="px-4 py-4 align-top">
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.1"
+                              value={ingredient.fat}
+                              onChange={(event) => handleIngredientChange(ingredient.id, 'fat', event.target.value)}
+                              className="rounded-xl border-gray-200"
+                            />
+                          </td>
+                          <td className="px-4 py-4 align-top">
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                className="h-9 w-9 rounded-xl border-gray-200"
+                                onClick={() =>
+                                  setExpandedIngredientId((prev) =>
+                                    prev === ingredient.id ? null : ingredient.id
+                                  )
+                                }
+                              >
+                                {expandedIngredientId === ingredient.id ? (
+                                  <ChevronUp className="h-4 w-4" />
+                                ) : (
+                                  <ChevronDown className="h-4 w-4" />
+                                )}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="destructive"
+                                size="icon"
+                                className="h-9 w-9 rounded-xl"
+                                onClick={() => handleRemoveIngredient(ingredient.id)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
                             </div>
                           </td>
                         </tr>
-                      )}
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
+                        {expandedIngredientId === ingredient.id && (
+                          <tr>
+                            <td colSpan={8} className="px-6 pb-6">
+                              <div className="mt-2 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
+                                <p className="text-sm font-medium text-emerald-800">
+                                  Micronutrients
+                                </p>
+                                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                                  {MICRO_NUTRIENTS.map((field) => (
+                                    <div key={field} className="space-y-1">
+                                      <Label className="text-xs font-medium text-emerald-900">
+                                        {nutritionFields.find((item) => item.key === field)?.label}
+                                      </Label>
+                                      <Input
+                                        type="number"
+                                        min="0"
+                                        step={field === 'sodium' || field === 'potassium' || field === 'calcium' ? '1' : '0.1'}
+                                        value={ingredient[field]}
+                                        onChange={(event) =>
+                                          handleIngredientChange(ingredient.id, field, event.target.value)
+                                        }
+                                        className="rounded-xl border-emerald-100 bg-white/70 focus:border-emerald-300 focus:ring-emerald-200"
+                                      />
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="md:hidden space-y-4 px-4 pb-4">
+            {(editedData.ingredients || []).map((ingredient) => {
+              const {
+                suggestionsForIngredient,
+                isFetchingSuggestions,
+                hasFetchedSuggestions,
+                suggestionError,
+                selectedSuggestion,
+              } = getSuggestionState(ingredient.id);
+              const shouldShowSuggestions = isFetchingSuggestions || hasFetchedSuggestions;
+
+              return (
+                <div
+                  key={ingredient.id}
+                  className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm"
+                >
+                  <div className="space-y-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="relative">
+                          <Input
+                            value={ingredient.name}
+                            onChange={(event) => handleIngredientNameInput(ingredient.id, event.target.value)}
+                            placeholder="Ingredient name"
+                            className="w-full rounded-xl border-gray-200 pr-10"
+                          />
+                          {isFetchingSuggestions && (
+                            <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-gray-400" />
+                          )}
+                          {shouldShowSuggestions && (
+                            <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-60 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-xl">
+                              {suggestionsForIngredient.length === 0 ? (
+                                <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-500">
+                                  {isFetchingSuggestions ? (
+                                    <>
+                                      <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                                      <span>Fetching suggestions…</span>
+                                    </>
+                                  ) : suggestionError ? (
+                                    <span>{suggestionError}</span>
+                                  ) : (
+                                    <span>No suggestions found</span>
+                                  )}
+                                </div>
+                              ) : (
+                                <ul className="divide-y divide-gray-100">
+                                  {suggestionsForIngredient.map((suggestion) => (
+                                    <li key={`${ingredient.id}-${suggestion.id || suggestion.name}`}>
+                                      <button
+                                        type="button"
+                                        className="block w-full px-4 py-3 text-left hover:bg-gray-50"
+                                        onClick={() => handleSuggestionSelect(ingredient.id, suggestion)}
+                                      >
+                                        <div className="font-medium text-gray-900">{suggestion.name}</div>
+                                        {suggestion.description && (
+                                          <div className="text-xs text-gray-500 mt-1">{suggestion.description}</div>
+                                        )}
+                                        {suggestion.example_portion && (
+                                          <div className="text-xs text-gray-400 mt-1">
+                                            Example: {suggestion.example_portion}
+                                          </div>
+                                        )}
+                                        {suggestion.data_source && (
+                                          <div className="text-[10px] uppercase tracking-wide text-gray-300 mt-2">
+                                            {suggestion.data_source === 'openai'
+                                              ? 'AI suggestion'
+                                              : suggestion.data_source === 'fallback'
+                                                ? 'Reference library'
+                                                : suggestion.data_source === 'usda'
+                                                  ? 'USDA database'
+                                                  : 'Suggested value'}
+                                          </div>
+                                        )}
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <p className="mt-2 text-xs text-gray-400">
+                          {formatUnitLabel(ingredient.unit)} detected
+                        </p>
+                        {selectedSuggestion && (
+                          <p className="text-xs text-emerald-600 mt-1">
+                            {selectedSuggestion.data_source === 'openai'
+                              ? 'AI suggestion'
+                              : selectedSuggestion.data_source === 'usda'
+                                ? 'USDA database'
+                                : 'Suggested value'}: {selectedSuggestion.name}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-9 w-9 rounded-xl border-gray-200"
+                          onClick={() =>
+                            setExpandedIngredientId((prev) =>
+                              prev === ingredient.id ? null : ingredient.id
+                            )
+                          }
+                        >
+                          {expandedIngredientId === ingredient.id ? (
+                            <ChevronUp className="h-4 w-4" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4" />
+                          )}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="icon"
+                          className="h-9 w-9 rounded-xl"
+                          onClick={() => handleRemoveIngredient(ingredient.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <Label className="text-xs font-medium text-gray-600">Amount</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={ingredient.amount}
+                          onChange={(event) => handleIngredientChange(ingredient.id, 'amount', event.target.value)}
+                          className="rounded-xl border-gray-200"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs font-medium text-gray-600">Unit</Label>
+                        <Select
+                          value={ingredient.unit}
+                          onValueChange={(value) => handleIngredientChange(ingredient.id, 'unit', value)}
+                        >
+                          <SelectTrigger className="rounded-xl border-gray-200">
+                            <SelectValue placeholder="Select unit" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {UNIT_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <Label className="text-xs font-medium text-gray-600">Calories</Label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={ingredient.calories}
+                            onChange={(event) => handleIngredientChange(ingredient.id, 'calories', event.target.value)}
+                            className="rounded-xl border-gray-200"
+                          />
+                          {estimateLoading[ingredient.id] && (
+                            <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
+                          )}
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs font-medium text-gray-600">Protein (g)</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={ingredient.protein}
+                          onChange={(event) => handleIngredientChange(ingredient.id, 'protein', event.target.value)}
+                          className="rounded-xl border-gray-200"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs font-medium text-gray-600">Carbs (g)</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={ingredient.carbs}
+                          onChange={(event) => handleIngredientChange(ingredient.id, 'carbs', event.target.value)}
+                          className="rounded-xl border-gray-200"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs font-medium text-gray-600">Fat (g)</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={ingredient.fat}
+                          onChange={(event) => handleIngredientChange(ingredient.id, 'fat', event.target.value)}
+                          className="rounded-xl border-gray-200"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {expandedIngredientId === ingredient.id && (
+                    <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
+                      <p className="text-sm font-medium text-emerald-800">Micronutrients</p>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                        {MICRO_NUTRIENTS.map((field) => (
+                          <div key={`${ingredient.id}-${field}`} className="space-y-1">
+                            <Label className="text-xs font-medium text-emerald-900">
+                              {nutritionFields.find((item) => item.key === field)?.label}
+                            </Label>
+                            <Input
+                              type="number"
+                              min="0"
+                              step={field === 'sodium' || field === 'potassium' || field === 'calcium' ? '1' : '0.1'}
+                              value={ingredient[field]}
+                              onChange={(event) =>
+                                handleIngredientChange(ingredient.id, field, event.target.value)
+                              }
+                              className="rounded-xl border-emerald-100 bg-white/70 focus:border-emerald-300 focus:ring-emerald-200"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
           <div className="flex flex-col gap-3 p-6 border-t border-gray-100 bg-gray-50/80">
             <Button
