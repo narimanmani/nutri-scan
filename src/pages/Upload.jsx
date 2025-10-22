@@ -151,6 +151,24 @@ export default function UploadPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-emerald-50 p-4 md:p-8">
+      {isAnalyzing && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-emerald-950/40 backdrop-blur-sm"
+          role="alert"
+          aria-live="assertive"
+        >
+          <div className="flex flex-col items-center gap-4 rounded-3xl border border-white/40 bg-white/85 px-8 py-6 text-center shadow-2xl">
+            <div
+              className="h-12 w-12 animate-spin rounded-full border-4 border-emerald-500 border-t-transparent"
+              aria-hidden="true"
+            />
+            <div className="space-y-1">
+              <p className="text-base font-semibold text-emerald-900">Analyzing your meal…</p>
+              <p className="text-sm text-emerald-800/80">Thanks for your patience while we process the photo.</p>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="max-w-4xl mx-auto">
         {/* Header */}
         <div className="flex items-center gap-4 mb-8">
