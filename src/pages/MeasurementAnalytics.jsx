@@ -1,6 +1,6 @@
 import PropTypes from "prop-types";
 import { useEffect, useMemo, useState } from "react";
-import { loadMeasurementHistory } from "@/utils/measurementHistory.js";
+import { loadAllMeasurementHistory, loadMeasurementHistory } from "@/utils/measurementHistory.js";
 import { useAuth } from "@/context/AuthContext.jsx";
 import { SAMPLE_MEASUREMENT_HISTORY } from "@/data/sampleMeasurementHistory.js";
 
@@ -118,9 +118,8 @@ BodyShapeIcon.propTypes = {
   variant: PropTypes.oneOf(["table", "hero"]),
 };
 
-function buildMeasurementHistory(savedEntries = []) {
-  const combined = [...SAMPLE_MEASUREMENT_HISTORY, ...savedEntries];
-  return combined
+function buildMeasurementHistory(entries = []) {
+  return entries
     .map((entry) => normaliseEntry(entry))
     .sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime());
 }
@@ -150,6 +149,7 @@ function normaliseEntry(entry) {
     label: entry.label || (entry.source === "User" ? "User Measurement" : "Measurement"),
     source: entry.source ?? "Unknown",
     recordedAt: entry.recordedAt ?? new Date().toISOString(),
+    userId: typeof entry.userId === "string" && entry.userId.trim().length > 0 ? entry.userId.trim() : null,
     profile: {
       gender: entry.profile?.gender ?? "unspecified",
       age: entry.profile?.age ?? null,
@@ -626,19 +626,32 @@ function buildCombinedTips(shapeResult, somatotypeResult) {
 
 export default function MeasurementAnalytics() {
   const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [history, setHistory] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
 
   useEffect(() => {
-    const savedEntries = user?.id ? loadMeasurementHistory(user.id) : [];
-    const data = buildMeasurementHistory(savedEntries);
+    let entries = [];
+
+    if (isAdmin) {
+      const allEntries = loadAllMeasurementHistory();
+      entries = [...SAMPLE_MEASUREMENT_HISTORY, ...allEntries];
+    } else if (user?.id) {
+      const savedEntries = loadMeasurementHistory(user.id);
+      const sampleEntries = user.id === "sample_user" ? SAMPLE_MEASUREMENT_HISTORY : [];
+      entries = [...sampleEntries, ...savedEntries];
+    } else {
+      entries = SAMPLE_MEASUREMENT_HISTORY;
+    }
+
+    const data = buildMeasurementHistory(entries);
     setHistory(data);
     if (data.length) {
       setSelectedId(data[0].id);
     } else {
       setSelectedId(null);
     }
-  }, [user?.id]);
+  }, [isAdmin, user?.id]);
 
   const selectedEntry = useMemo(
     () => history.find((item) => item.id === selectedId) ?? null,
@@ -703,6 +716,9 @@ export default function MeasurementAnalytics() {
             <thead className="bg-emerald-50/60">
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-emerald-700">Label</th>
+                {isAdmin ? (
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-emerald-700">User</th>
+                ) : null}
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-emerald-700">Shape</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-emerald-700">Date</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-emerald-700">Gender</th>
@@ -732,6 +748,9 @@ export default function MeasurementAnalytics() {
                         <p className="text-xs text-emerald-700/70">{entry.notes.expectedSomatotype}</p>
                       ) : null}
                     </td>
+                    {isAdmin ? (
+                      <td className="px-4 py-3 text-sm font-medium text-emerald-800/80">{entry.userId ?? "—"}</td>
+                    ) : null}
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <BodyShapeIcon shape={shapeLabel} />

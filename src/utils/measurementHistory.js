@@ -117,6 +117,21 @@ export function loadMeasurementHistory(userId) {
   return Array.isArray(entries) ? [...entries] : [];
 }
 
+export function loadAllMeasurementHistory() {
+  const store = readStore();
+  return Object.entries(store.users).flatMap(([userId, entries]) => {
+    if (!Array.isArray(entries)) {
+      return [];
+    }
+
+    const normalizedId = normalizeUserId(userId);
+    return entries.map((entry) => ({
+      ...(typeof entry === 'object' && entry !== null ? entry : {}),
+      userId: normalizedId,
+    }));
+  });
+}
+
 export function saveMeasurementEntry(entry, userId) {
   if (!userId) {
     throw new Error('A signed-in user is required to save measurement history.');
