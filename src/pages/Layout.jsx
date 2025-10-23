@@ -17,6 +17,7 @@ import {
   SidebarTrigger,
 } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
+import PWAControls from '@/components/PWAControls.jsx';
 import { useAuth } from '@/context/AuthContext.jsx';
 
 const BASE_NAVIGATION_ITEMS = [
@@ -143,6 +144,7 @@ export default function Layout({ children, currentPageName }) {
           </SidebarContent>
 
           <SidebarFooter className="border-t border-gray-100 p-6 space-y-3">
+            <PWAControls />
             <div className="bg-gradient-to-r from-emerald-50 to-teal-50 p-4 rounded-xl border border-emerald-100">
               <h3 className="font-semibold text-emerald-800 text-sm mb-1">Stay Healthy!</h3>
               <p className="text-emerald-600 text-xs leading-relaxed">{APP_DESCRIPTION}</p>
