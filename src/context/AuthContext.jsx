@@ -5,6 +5,7 @@ import {
   logoutUser,
   refreshUserSession,
   registerUser,
+  loginWithGoogleProfile,
 } from '@/api/auth.js';
 import { readSession, subscribeToSessionChanges } from '@/lib/session.js';
 
@@ -12,6 +13,7 @@ const AuthContext = createContext({
   user: null,
   isLoading: true,
   login: async () => {},
+  loginWithGoogle: async () => {},
   register: async () => {},
   logout: async () => {},
   refresh: async () => {},
@@ -65,6 +67,12 @@ export function AuthProvider({ children }) {
     return account;
   };
 
+  const handleGoogleLogin = async (profile) => {
+    const account = await loginWithGoogleProfile(profile);
+    setUser(account);
+    return account;
+  };
+
   const handleLogout = async () => {
     await logoutUser();
     setUser(null);
@@ -81,6 +89,7 @@ export function AuthProvider({ children }) {
       user,
       isLoading,
       login: handleLogin,
+      loginWithGoogle: handleGoogleLogin,
       register: handleRegister,
       logout: handleLogout,
       refresh,

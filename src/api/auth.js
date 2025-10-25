@@ -6,6 +6,11 @@ const USER_DATA_VERSION = 1;
 const USERS_API_ENDPOINT = '/.netlify/functions/users';
 const DEFAULT_USERS = Array.isArray(defaultUsersSeed) ? defaultUsersSeed : [];
 
+export const AUTH_PROVIDERS = {
+  PASSWORD: 'password',
+  GOOGLE: 'google',
+};
+
 let cachedStorePromise;
 
 function isBrowser() {
@@ -65,12 +70,22 @@ function toStoreRecord(record, { fallbackCreatedAt = null } = {}) {
     return null;
   }
 
-  const passwordHash =
-    typeof record.passwordHash === 'string' && record.passwordHash.trim().length > 0
-      ? record.passwordHash.trim()
-      : '';
-  if (!passwordHash) {
-    return null;
+  const authProvider = record.authProvider === AUTH_PROVIDERS.GOOGLE ? AUTH_PROVIDERS.GOOGLE : AUTH_PROVIDERS.PASSWORD;
+
+  let passwordHash = '';
+  if (authProvider === AUTH_PROVIDERS.PASSWORD) {
+    passwordHash =
+      typeof record.passwordHash === 'string' && record.passwordHash.trim().length > 0
+        ? record.passwordHash.trim()
+        : '';
+    if (!passwordHash) {
+      return null;
+    }
+  } else {
+    passwordHash =
+      typeof record.passwordHash === 'string' && record.passwordHash.trim().length > 0
+        ? record.passwordHash.trim()
+        : `google-oauth:${username}`;
   }
 
   const createdAtRaw =
@@ -87,6 +102,7 @@ function toStoreRecord(record, { fallbackCreatedAt = null } = {}) {
     displayName: sanitizeDisplayName(record.displayName, username),
     role: record.role === 'admin' ? 'admin' : 'user',
     passwordHash,
+    authProvider,
     createdAt: createdAtRaw,
     updatedAt: updatedAtRaw,
     lastLoginAt:
@@ -102,6 +118,7 @@ function serializeStore(store) {
     displayName: record.displayName,
     role: record.role === 'admin' ? 'admin' : 'user',
     passwordHash: record.passwordHash,
+    authProvider: record.authProvider === AUTH_PROVIDERS.GOOGLE ? AUTH_PROVIDERS.GOOGLE : AUTH_PROVIDERS.PASSWORD,
     createdAt: record.createdAt || null,
     updatedAt: record.updatedAt || record.createdAt || null,
     lastLoginAt: record.lastLoginAt || null,
@@ -331,6 +348,7 @@ export async function registerUser({ username, password, displayName }) {
     username: normalizedUsername,
     displayName: sanitizeDisplayName(displayName, normalizedUsername),
     role: 'user',
+    authProvider: AUTH_PROVIDERS.PASSWORD,
     passwordHash,
     createdAt: now,
     updatedAt: now,
@@ -365,6 +383,10 @@ export async function loginUser({ username, password }) {
     throw new Error('No account found with that username.');
   }
 
+  if (record.authProvider === AUTH_PROVIDERS.GOOGLE) {
+    throw new Error('Use Google sign-in to access this account.');
+  }
+
   const passwordHash = await hashPassword(password);
   if (record.passwordHash !== passwordHash) {
     throw new Error('Incorrect password.');
@@ -383,6 +405,54 @@ export async function loginUser({ username, password }) {
     role: publicUser.role,
     createdAt: publicUser.createdAt,
     lastLoginAt: now,
+  });
+
+  return publicUser;
+}
+
+export async function loginWithGoogleProfile({ email, displayName, sub }) {
+  const normalizedEmail = sanitizeUsername(email);
+  if (!normalizedEmail) {
+    throw new Error('Your Google account did not include a valid email address.');
+  }
+
+  const store = await loadUserStore();
+  let record = store.users[normalizedEmail];
+  const now = new Date().toISOString();
+
+  if (record) {
+    if (record.authProvider !== AUTH_PROVIDERS.GOOGLE) {
+      throw new Error('An account with this email already exists. Sign in with your password instead.');
+    }
+
+    record.displayName = sanitizeDisplayName(displayName, normalizedEmail);
+    record.lastLoginAt = now;
+    record.updatedAt = now;
+  } else {
+    record = {
+      username: normalizedEmail,
+      displayName: sanitizeDisplayName(displayName, normalizedEmail),
+      role: 'user',
+      authProvider: AUTH_PROVIDERS.GOOGLE,
+      passwordHash: `google-oauth:${sub || normalizedEmail}`,
+      createdAt: now,
+      updatedAt: now,
+      lastLoginAt: now,
+    };
+
+    store.users[normalizedEmail] = record;
+  }
+
+  await writeUserStore(store);
+
+  const publicUser = toPublicUser(record);
+  writeSession({
+    ...publicUser,
+    username: publicUser.username,
+    displayName: publicUser.displayName,
+    role: publicUser.role,
+    createdAt: publicUser.createdAt,
+    lastLoginAt: record.lastLoginAt,
   });
 
   return publicUser;
