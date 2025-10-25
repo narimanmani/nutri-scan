@@ -7,7 +7,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Separator } from '@/components/ui/separator';
 import { Leaf } from 'lucide-react';
+import { GoogleSignInButton } from '@/components/auth/GoogleSignInButton.jsx';
 
 const ADMIN_HELP_TEXT =
   'An administrator account is pre-configured (username: admin, password: adminNutri!234). Admins can access the Body Measurements Admin tools and view registered users.';
@@ -18,12 +20,13 @@ function normalizeUsername(value = '') {
 
 export default function AuthPage() {
   const navigate = useNavigate();
-  const { user, isLoading, login, register } = useAuth();
+  const { user, isLoading, login, loginWithGoogle, register } = useAuth();
   const [mode, setMode] = useState('login');
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [registerForm, setRegisterForm] = useState({ username: '', password: '', displayName: '' });
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const isGoogleEnabled = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID);
 
   useEffect(() => {
     if (!isLoading && user) {
@@ -90,6 +93,25 @@ export default function AuthPage() {
     }
   };
 
+  const handleGoogleSuccess = async (profile) => {
+    setMode('login');
+    setError('');
+    setIsSubmitting(true);
+    try {
+      await loginWithGoogle(profile);
+      navigate('/', { replace: true });
+    } catch (err) {
+      setError(err?.message || 'Unable to sign in with Google.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleGoogleError = (err) => {
+    setMode('login');
+    setError(err?.message || 'Google sign-in was cancelled or failed.');
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-emerald-100 flex items-center justify-center px-4 py-12">
       <div className="w-full max-w-4xl grid gap-8 lg:grid-cols-[1fr_minmax(0,1.2fr)] items-center">
@@ -123,39 +145,60 @@ export default function AuthPage() {
               </TabsList>
 
               <TabsContent value="login">
-                <form className="space-y-5" onSubmit={handleLoginSubmit}>
-                  <div className="space-y-2">
-                    <Label htmlFor="login-username">Username</Label>
-                    <Input
-                      id="login-username"
-                      value={loginForm.username}
-                      onChange={(event) =>
-                        setLoginForm((prev) => ({ ...prev, username: event.target.value }))
-                      }
-                      placeholder="e.g. sample_user"
-                      autoComplete="username"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="login-password">Password</Label>
-                    <Input
-                      id="login-password"
-                      type="password"
-                      value={loginForm.password}
-                      onChange={(event) =>
-                        setLoginForm((prev) => ({ ...prev, password: event.target.value }))
-                      }
-                      placeholder="Enter your password"
-                      autoComplete="current-password"
-                    />
-                  </div>
-                  {error && mode === 'login' && (
-                    <p className="text-sm text-red-600">{error}</p>
+                <div className="space-y-5">
+                  <form className="space-y-5" onSubmit={handleLoginSubmit}>
+                    <div className="space-y-2">
+                      <Label htmlFor="login-username">Username</Label>
+                      <Input
+                        id="login-username"
+                        value={loginForm.username}
+                        onChange={(event) =>
+                          setLoginForm((prev) => ({ ...prev, username: event.target.value }))
+                        }
+                        placeholder="e.g. sample_user"
+                        autoComplete="username"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="login-password">Password</Label>
+                      <Input
+                        id="login-password"
+                        type="password"
+                        value={loginForm.password}
+                        onChange={(event) =>
+                          setLoginForm((prev) => ({ ...prev, password: event.target.value }))
+                        }
+                        placeholder="Enter your password"
+                        autoComplete="current-password"
+                      />
+                    </div>
+                    {error && mode === 'login' && (
+                      <p className="text-sm text-red-600">{error}</p>
+                    )}
+                    <Button type="submit" className="w-full" disabled={isSubmitting || isLoginDisabled}>
+                      {isSubmitting ? 'Signing in…' : 'Sign in'}
+                    </Button>
+                  </form>
+
+                  {isGoogleEnabled ? (
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-3 text-xs uppercase tracking-wide text-emerald-900/70">
+                        <Separator className="flex-1" />
+                        <span>Or continue with</span>
+                        <Separator className="flex-1" />
+                      </div>
+                      <GoogleSignInButton
+                        onSuccess={handleGoogleSuccess}
+                        onError={handleGoogleError}
+                        disabled={isSubmitting}
+                      />
+                    </div>
+                  ) : (
+                    <p className="text-xs text-emerald-900/70 text-center">
+                      Google sign-in is not configured. Contact your administrator to enable it.
+                    </p>
                   )}
-                  <Button type="submit" className="w-full" disabled={isSubmitting || isLoginDisabled}>
-                    {isSubmitting ? 'Signing in…' : 'Sign in'}
-                  </Button>
-                </form>
+                </div>
               </TabsContent>
 
               <TabsContent value="register">
