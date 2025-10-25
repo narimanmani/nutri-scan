@@ -1,8 +1,65 @@
-import { useState } from 'react';
-import { useGoogleLogin } from '@react-oauth/google';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
 import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
+
+const GOOGLE_IDENTITY_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
+
+let googleIdentityScriptPromise = null;
+
+function resetGoogleIdentityScriptPromise() {
+  googleIdentityScriptPromise = null;
+}
+
+function loadGoogleIdentityServices() {
+  if (typeof window === 'undefined') {
+    return Promise.reject(new Error('Google sign-in is only available in the browser.'));
+  }
+
+  if (window.google?.accounts?.oauth2) {
+    return Promise.resolve(window.google);
+  }
+
+  if (googleIdentityScriptPromise) {
+    return googleIdentityScriptPromise;
+  }
+
+  googleIdentityScriptPromise = new Promise((resolve, reject) => {
+    const existingScript = document.querySelector('script[data-google-identity-script="true"]');
+
+    const handleLoad = () => {
+      if (window.google?.accounts?.oauth2) {
+        resolve(window.google);
+        return;
+      }
+
+      resetGoogleIdentityScriptPromise();
+      reject(new Error('Google Identity Services failed to initialise.'));
+    };
+
+    const handleError = () => {
+      resetGoogleIdentityScriptPromise();
+      reject(new Error('Failed to load Google Identity Services.'));
+    };
+
+    if (existingScript) {
+      existingScript.addEventListener('load', handleLoad, { once: true });
+      existingScript.addEventListener('error', handleError, { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = GOOGLE_IDENTITY_SCRIPT_SRC;
+    script.async = true;
+    script.defer = true;
+    script.dataset.googleIdentityScript = 'true';
+    script.addEventListener('load', handleLoad, { once: true });
+    script.addEventListener('error', handleError, { once: true });
+    document.head.appendChild(script);
+  });
+
+  return googleIdentityScriptPromise;
+}
 
 async function fetchGoogleProfile(accessToken) {
   const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
@@ -23,11 +80,92 @@ async function fetchGoogleProfile(accessToken) {
 
 export function GoogleSignInButton({ onSuccess, onError, disabled = false }) {
   const [isLoading, setIsLoading] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+  const [scriptError, setScriptError] = useState(null);
+  const tokenClientRef = useRef(null);
+  const handlersRef = useRef({ onSuccess, onError });
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
-  const login = useGoogleLogin({
-    flow: 'implicit',
-    scope: 'openid email profile',
-    onSuccess: async (tokenResponse) => {
+  useEffect(() => {
+    handlersRef.current = { onSuccess, onError };
+  }, [onSuccess, onError]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    if (!googleClientId) {
+      setIsReady(false);
+      setScriptError(new Error('Google client ID is not configured.'));
+      tokenClientRef.current = null;
+      return () => {
+        isActive = false;
+      };
+    }
+
+    loadGoogleIdentityServices()
+      .then((google) => {
+        if (!isActive) {
+          return;
+        }
+
+        if (!google?.accounts?.oauth2) {
+          throw new Error('Google Identity Services are unavailable.');
+        }
+
+        tokenClientRef.current = google.accounts.oauth2.initTokenClient({
+          client_id: googleClientId,
+          scope: 'openid email profile',
+          callback: () => {},
+        });
+
+        setScriptError(null);
+        setIsReady(true);
+      })
+      .catch((error) => {
+        if (!isActive) {
+          return;
+        }
+
+        const normalizedError =
+          error instanceof Error
+            ? error
+            : new Error('Unable to initialise Google sign-in. Please try again later.');
+
+        setScriptError(normalizedError);
+        setIsReady(false);
+        tokenClientRef.current = null;
+        handlersRef.current.onError?.(normalizedError);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [googleClientId]);
+
+  const handleClick = useCallback(() => {
+    if (disabled || isLoading) {
+      return;
+    }
+
+    if (!isReady || !tokenClientRef.current) {
+      const fallbackError =
+        scriptError || new Error('Google sign-in is currently unavailable. Please try again later.');
+      handlersRef.current.onError?.(fallbackError);
+      return;
+    }
+
+    setIsLoading(true);
+
+    tokenClientRef.current.callback = async (tokenResponse) => {
+      if (tokenResponse?.error) {
+        const error = new Error(
+          tokenResponse.error_description || 'Google sign-in failed. Please try again.',
+        );
+        setIsLoading(false);
+        handlersRef.current.onError?.(error);
+        return;
+      }
+
       try {
         if (!tokenResponse?.access_token) {
           throw new Error('Google did not provide an access token.');
@@ -38,35 +176,31 @@ export function GoogleSignInButton({ onSuccess, onError, disabled = false }) {
           throw new Error('Your Google account is missing an email address.');
         }
 
-        await onSuccess?.(profile);
+        await handlersRef.current.onSuccess?.(profile);
       } catch (error) {
-        onError?.(
+        const normalizedError =
           error instanceof Error
             ? error
-            : new Error('Unable to complete Google sign-in. Please try again.'),
-        );
+            : new Error('Unable to complete Google sign-in. Please try again.');
+        handlersRef.current.onError?.(normalizedError);
       } finally {
         setIsLoading(false);
       }
-    },
-    onError: (errorResponse) => {
+    };
+
+    try {
+      tokenClientRef.current.requestAccessToken({ prompt: 'select_account' });
+    } catch (error) {
       setIsLoading(false);
-      onError?.(
-        errorResponse instanceof Error
-          ? errorResponse
-          : new Error('Google sign-in was cancelled or failed. Please try again.'),
-      );
-    },
-  });
-
-  const handleClick = () => {
-    if (disabled || isLoading) {
-      return;
+      const normalizedError =
+        error instanceof Error
+          ? error
+          : new Error('Google sign-in is currently unavailable. Please try again later.');
+      handlersRef.current.onError?.(normalizedError);
     }
+  }, [disabled, isLoading, isReady, scriptError]);
 
-    setIsLoading(true);
-    login();
-  };
+  const isButtonDisabled = disabled || isLoading || !isReady;
 
   return (
     <Button
@@ -74,7 +208,8 @@ export function GoogleSignInButton({ onSuccess, onError, disabled = false }) {
       variant="outline"
       className="w-full bg-white text-emerald-900 hover:bg-emerald-50"
       onClick={handleClick}
-      disabled={disabled || isLoading}
+      disabled={isButtonDisabled}
+      aria-disabled={isButtonDisabled}
     >
       {isLoading ? (
         <span className="flex items-center justify-center gap-2">
@@ -95,6 +230,12 @@ GoogleSignInButton.propTypes = {
   onSuccess: PropTypes.func,
   onError: PropTypes.func,
   disabled: PropTypes.bool,
+};
+
+GoogleSignInButton.defaultProps = {
+  onSuccess: undefined,
+  onError: undefined,
+  disabled: false,
 };
 
 function GoogleIcon({ className }) {
@@ -121,10 +262,3 @@ GoogleIcon.propTypes = {
 GoogleIcon.defaultProps = {
   className: '',
 };
-
-GoogleSignInButton.defaultProps = {
-  onSuccess: undefined,
-  onError: undefined,
-  disabled: false,
-};
-
